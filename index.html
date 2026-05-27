@@ -32,6 +32,7 @@
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); justify-content: center; align-items: center; z-index: 100; }
         .modal-content { background: #34495e; padding: 20px; border-radius: 10px; text-align: center; max-width: 300px; width: 80%; }
         .modal button { margin: 5px 0; }
+        .score-badge { background: #f1c40f; color: #2c3e50; padding: 2px 6px; border-radius: 10px; font-weight: bold; font-size: 0.8rem; margin-left: 5px; }
     </style>
 </head>
 <body>
@@ -61,7 +62,10 @@
         <span id="role-display" style="color: #f1c40f;">-</span>
     </div>
     <div id="player-list"></div>
+    
     <button id="start-game-btn" style="display: none; margin: 10px 0;" onclick="hostStartGame()">ゲームを開始する</button>
+    <button id="next-round-btn" style="display: none; margin: 10px 0; background: #3498db;" onclick="hostNextRound()">次のラウンドを開始</button>
+    <button id="reset-game-btn" style="display: none; margin: 10px 0; background: #e67e22;" onclick="hostResetEntireGame()">ゲームを完全にリセット</button>
     
     <div class="log-box" id="log-box"></div>
     
@@ -81,6 +85,7 @@ const CARD_DATA = {
     8: { name: "姫", effect: "手札から捨てると即脱落する" }
 };
 const ORIGINAL_DECK = [1,1,1,1,1, 2,2, 3,3, 4,4, 5, 8]; 
+const WINNING_SCORE = 3; // 3ポイント先取
 
 let peer = null;
 let connections = []; 
@@ -91,8 +96,10 @@ let myName = "";
 
 let gameState = {
     started: false,
+    roundOver: false, // ラウンドが終了したかフラグ
+    matchOver: false, // 3点先取されて完全決着したかフラグ
     deck: [],
-    players: [], 
+    players: [], // { peerId, name, hand:[], alive:true, protected:false, score:0 }
     turnIndex: 0,
     logs: []
 };
@@ -119,7 +126,7 @@ document.getElementById('my-peer-id').onclick = () => {
 function beHost() {
     isHost = true;
     myName = document.getElementById('name-input').value;
-    gameState.players = [{ peerId: myId, name: myName, hand: [], alive: true, protected: false }];
+    gameState.players = [{ peerId: myId, name: myName, hand: [], alive: true, protected: false, score: 0 }];
     
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
@@ -179,6 +186,8 @@ function joinRoom() {
 
 function resetToSetup() {
     gameState.started = false;
+    gameState.roundOver = false;
+    gameState.matchOver = false;
     gameState.players = [];
     if(connToHost) { connToHost.close(); connToHost = null; }
     document.getElementById('setup-container').style.display = 'block';
@@ -223,7 +232,7 @@ function handleDisconnect(peerId) {
 function handleDataFromGuest(data, conn) {
     if (data.type === 'JOIN') {
         if(!gameState.players.some(p => p.peerId === conn.peer)) {
-            gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false });
+            gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false, score: 0 });
             pushLog(`[参加] ${data.name} が参加しました。`);
         }
         broadcastState();
@@ -245,13 +254,24 @@ function pushLog(msg) {
     if(gameState.logs.length > 20) gameState.logs.shift();
 }
 
+// 【ホスト】最初の完全なゲーム開始
 function hostStartGame() {
     if(gameState.players.length < 2) return alert("2人以上いないと始められません！");
     document.getElementById('start-game-btn').style.display = 'none';
     
+    // 全員のスコアをリセット
+    gameState.players.forEach(p => p.score = 0);
+    gameState.matchOver = false;
+    
+    startNewRound();
+}
+
+// 【ホスト】新しいラウンドのカード配布処理
+function startNewRound() {
     gameState.started = true;
+    gameState.roundOver = false;
     gameState.deck = [...ORIGINAL_DECK].sort(() => Math.random() - 0.5);
-    gameState.deck.pop(); 
+    gameState.deck.pop(); // 1枚除外
     
     gameState.players.forEach(p => {
         p.hand = [gameState.deck.pop()];
@@ -260,8 +280,34 @@ function hostStartGame() {
     });
     
     gameState.turnIndex = 0;
-    pushLog("[開始] ゲームが開始されました！");
+    pushLog(`[開始] ラウンドが開始されました！(3点先取)`);
     startTurn();
+}
+
+// 【ホスト】次のラウンドへ進む（リザルト画面から次へ）
+function hostNextRound() {
+    if(!isHost || !gameState.roundOver || gameState.matchOver) return;
+    document.getElementById('next-round-btn').style.display = 'none';
+    startNewRound();
+}
+
+// 【ホスト】ゲームの完全リセット
+function hostResetEntireGame() {
+    if(!isHost) return;
+    document.getElementById('next-round-btn').style.display = 'none';
+    document.getElementById('reset-game-btn').style.display = 'none';
+    document.getElementById('start-game-btn').style.display = 'block';
+    
+    gameState.started = false;
+    gameState.roundOver = false;
+    gameState.matchOver = false;
+    gameState.players.forEach(p => {
+        p.score = 0;
+        p.hand = [];
+        p.alive = true;
+    });
+    pushLog("[リセット] ゲームが完全にリセットされました。");
+    broadcastState();
 }
 
 function startTurn() {
@@ -283,6 +329,7 @@ function startTurn() {
 }
 
 function nextTurn() {
+    if (gameState.roundOver) return; // ラウンドが終わってたら次に行かない
     gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
     startTurn();
 }
@@ -298,19 +345,22 @@ function updateUI() {
     listEl.innerHTML = "";
     
     gameState.players.forEach((p, idx) => {
-        const isCurrent = idx === gameState.turnIndex && gameState.started;
+        const isCurrent = idx === gameState.turnIndex && gameState.started && !gameState.roundOver;
         let statusText = p.alive ? "生存" : "脱落";
         if (p.protected) statusText += " (ガード状態)";
-        if (p.alive && p.peerId === myId) statusText += ` (手札:${p.hand.length}枚)`;
+        if (p.alive && p.peerId === myId && gameState.started && !gameState.roundOver) statusText += ` (手札:${p.hand.length}枚)`;
 
         const item = document.createElement("div");
-        item.className = `player-item ${isCurrent ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
+        item.className = `player-item ${isCurrent ? 'active' : ''} ${(!p.alive && gameState.started) ? 'eliminated' : ''}`;
         
         const infoSpan = document.createElement("span");
-        infoSpan.innerHTML = `<span>${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
+        infoSpan.innerHTML = `<span>${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> 
+                              <span class="score-badge">${p.score}pt</span>
+                              <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
         item.appendChild(infoSpan);
 
-        if (isHost && p.peerId !== myId) {
+        // キックボタン（ゲーム開始前のみ表示可能にする）
+        if (isHost && p.peerId !== myId && !gameState.started) {
             const kickBtn = document.createElement("button");
             kickBtn.className = "btn-danger";
             kickBtn.innerText = "キック";
@@ -321,11 +371,29 @@ function updateUI() {
         listEl.appendChild(item);
     });
 
+    // ホスト用のコントロールボタン表示制御
+    if (isHost) {
+        if (gameState.roundOver) {
+            if (gameState.matchOver) {
+                document.getElementById('next-round-btn').style.display = 'none';
+                document.getElementById('reset-game-btn').style.display = 'block';
+            } else {
+                document.getElementById('next-round-btn').style.display = 'block';
+                document.getElementById('reset-game-btn').style.display = 'block';
+            }
+        } else {
+            document.getElementById('next-round-btn').style.display = 'none';
+            document.getElementById('reset-game-btn').style.display = 'none';
+        }
+    }
+
+    // 手札エリアの表示
     const cardArea = document.getElementById("card-area");
     cardArea.innerHTML = "";
     const me = gameState.players.find(p => p.peerId === myId);
     
-    if (me && me.alive && gameState.started) {
+    // ラウンド進行中のみ手札を見せる
+    if (me && me.alive && gameState.started && !gameState.roundOver) {
         document.getElementById("hand-title").style.display = "block";
         const isMyTurn = gameState.players[gameState.turnIndex].peerId === myId;
         
@@ -416,6 +484,8 @@ function sendAction(action) {
 }
 
 function resolveAction(action) {
+    if (gameState.roundOver) return; // すでに終わってたら処理しない
+
     const attacker = gameState.players[gameState.turnIndex];
     const cardIdx = attacker.hand.indexOf(action.card);
     attacker.hand.splice(cardIdx, 1);
@@ -476,35 +546,50 @@ function resolveAction(action) {
         if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
     }
 
-    broadcastState();
-    setTimeout(nextTurn, 2000);
+    // 生存チェック
+    const alivePlayers = gameState.players.filter(p => p.alive);
+    if (alivePlayers.length <= 1 || gameState.deck.length === 0) {
+        endGame();
+    } else {
+        broadcastState();
+        setTimeout(nextTurn, 2000);
+    }
 }
 
 function endGame() {
-    gameState.started = false;
-    pushLog("--- ゲーム終了 ---");
-    let winner = null;
+    gameState.roundOver = true; // ラウンド終了フラグを立てる
+    pushLog("--- ラウンド終了 ---");
+    
+    let roundWinner = null;
     let maxCard = -1;
 
+    // 手札の公開と勝者判定
     gameState.players.forEach(p => {
         if (p.alive) {
             const card = p.hand[0] || 0;
-            pushLog(`[手札公開] ${p.name} の手札は 【${CARD_DATA[card] ? CARD_DATA[card].name : card}】`);
+            pushLog(`[公開] ${p.name} の手札は 【${CARD_DATA[card] ? CARD_DATA[card].name : card}】`);
             if (card > maxCard) {
                 maxCard = card;
-                winner = p;
+                roundWinner = p;
             }
         }
     });
 
-    if (winner) {
-        pushLog(`[勝者] 勝者は 【${winner.name}】 です！おめでとう！`);
+    if (roundWinner) {
+        roundWinner.score += 1; // ポイント加算
+        pushLog(`[目標] ${roundWinner.name} がこのラウンドを獲得！(+1pt)`);
+        
+        // 3ポイント先取したかチェック
+        if (roundWinner.score >= WINNING_SCORE) {
+            gameState.matchOver = true;
+            pushLog(`🏆🎉【最終勝者】${roundWinner.name} が 3点先取し、ゲームを制しました！！`);
+        }
     } else {
-        pushLog("[結果] 生存者がおらず、引き分けです。");
+        pushLog("[結果] 生存者がおらず、このラウンドは引き分けです。");
     }
     
+    // 【最重要】ログをすべて書き終えたあとにデータを全送信（これで対戦相手にリザルトが確実に同期する）
     broadcastState();
-    if(isHost) document.getElementById('start-game-btn').style.display = 'block';
 }
 </script>
 </body>
