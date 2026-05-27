@@ -46,12 +46,12 @@
         <input type="text" id="name-input" value="プレイヤー">
     </div>
     
-    <div class="input-group" id="host-setup">
-        <button onclick="beHost()">親（ホスト）として部屋を作る</button>
-    </div>
-    
     <hr style="border: 0; border-top: 1px solid #7f8c8d; margin: 20px 0;">
     
+    <div class="input-group" id="host-setup" style="margin-bottom: 20px;">
+        <button onclick="beHost()">親（ホスト）として部屋を作る</button>
+    </div>
+
     <div class="input-group">
         <label>参加する部屋のID (数字8桁):</label>
         <input type="text" id="room-id-input" placeholder="ここに8桁の部屋IDを入力">
@@ -96,6 +96,7 @@ let connToHost = null;
 let isHost = false;
 let myId = "";
 let myName = "";
+let currentHostId = ""; // 現在のホストIDを保持
 
 let gameState = {
     started: false,
@@ -104,13 +105,12 @@ let gameState = {
     deck: [],
     players: [], 
     turnIndex: 0,
-    logs: []
+    logs: [],
+    hostPeerId: "" // 同期用のホストID
 };
 
-// 【重要】8桁のランダムな数字を生成 (10000000 ～ 99999999)
 const customRoomId = String(Math.floor(10000000 + Math.random() * 90000000));
 
-// 生成した8桁のIDをPeerJSの識別子として固定して初期化
 peer = new Peer(customRoomId, {
     config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
 });
@@ -136,14 +136,21 @@ document.getElementById('my-peer-id').onclick = () => {
 
 function beHost() {
     isHost = true;
+    currentHostId = myId;
+    gameState.hostPeerId = myId;
     myName = document.getElementById('name-input').value;
     gameState.players = [{ peerId: myId, name: myName, hand: [], alive: true, protected: false, score: 0 }];
     
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
-    document.getElementById('start-game-btn').style.display = 'block';
-    document.getElementById('role-display').innerText = `部屋の主 (部屋ID: ${myId})`;
+    setupHostConnectionListener();
     
+    pushLog(`[部屋作成] 部屋（ID: ${myId}）を作成しました。参加者を待っています...`);
+    updateUI();
+}
+
+// ホスト側の接続受付用リスナー
+function setupHostConnectionListener() {
     peer.on('connection', (conn) => {
         if (gameState.started) {
             setTimeout(() => { conn.send({ type: 'KICK', msg: '[システム] すでにゲームが開始されています。' }); }, 500);
@@ -153,27 +160,38 @@ function beHost() {
         conn.on('data', (data) => handleDataFromGuest(data, conn));
         conn.on('close', () => handleDisconnect(conn.peer));
     });
-    pushLog(`[部屋作成] 部屋（ID: ${myId}）を作成しました。参加者を待っています...`);
-    updateUI();
 }
 
 function joinRoom() {
     const hostId = document.getElementById('room-id-input').value.trim();
     if(!hostId) return alert("ホストの8桁の部屋IDを入力してください");
     myName = document.getElementById('name-input').value;
+    currentHostId = hostId;
+    
+    connectToHostId(hostId);
+}
+
+// 指定したホストに接続を試みる関数
+function connectToHostId(hostId) {
+    if(connToHost) { connToHost.close(); }
     
     connToHost = peer.connect(hostId);
     
     connToHost.on('open', () => {
         document.getElementById('setup-container').style.display = 'none';
         document.getElementById('game-container').style.display = 'block';
-        document.getElementById('role-display').innerText = `ゲスト参加中 (部屋ID: ${hostId})`;
         connToHost.send({ type: 'JOIN', name: myName });
     });
     
     connToHost.on('data', (data) => {
         if (data.type === 'SYNC') {
             gameState = data.state;
+            currentHostId = gameState.hostPeerId;
+            
+            // 【最重要】自分が新しいホストに任命されたかチェック
+            if (gameState.hostPeerId === myId && !isHost) {
+                becomeNewHost();
+            }
             updateUI();
         }
         if (data.type === 'ALERT') alert(data.msg);
@@ -184,23 +202,65 @@ function joinRoom() {
     });
 
     connToHost.on('close', () => {
-        alert("ホストとの接続が切れました。");
-        resetToSetup();
+        // 現在のホストが落ちた場合、少し待って状態を確認（自動で新ホストが誰になるか決定されるのを受け止める）
+        setTimeout(() => {
+            if (!isHost && currentHostId === gameState.hostPeerId) {
+                // まだホスト移行処理がされていない場合、プレイヤーリストの先頭（生存者）を頼りに再接続
+                handleHostFailure();
+            }
+        }, 1500);
     });
+}
 
-    setTimeout(() => {
-        if (document.getElementById('setup-container').style.display !== 'none') {
-            alert("指定された部屋IDが見つからないか、接続できませんでした。番号が合っているか確認してください。");
-        }
-    }, 5000);
+// ゲストから新ホストへ昇格する処理
+function becomeNewHost() {
+    isHost = true;
+    connToHost = null;
+    pushLog(`[システム] あなたが新しいホスト（部屋の主）になりました。`);
+    
+    // 他の生存プレイヤーとの接続を再確立する準備
+    connections = [];
+    setupHostConnectionListener();
+    
+    // 他のゲストが自分に接続し直してくるのを待って同期する
+    broadcastState();
+}
+
+// ホストが切断された際の受け渡し判定ロジック
+function handleHostFailure() {
+    // 退出した古いホストを削除
+    const oldHostId = gameState.hostPeerId;
+    gameState.players = gameState.players.filter(p => p.peerId !== oldHostId);
+    
+    if (gameState.players.length === 0) {
+        alert("部屋の接続が完全に切れました。");
+        resetToSetup();
+        return;
+    }
+    
+    // リストに残った最初のプレイヤーを「新ホスト」として全員で認識する
+    const nextHost = gameState.players[0];
+    gameState.hostPeerId = nextHost.peerId;
+    
+    pushLog(`[ホスト交代] 元のホストが切断したため、${nextHost.name} が新しいホストになります。`);
+    
+    if (nextHost.peerId === myId) {
+        becomeNewHost();
+    } else {
+        // 新しいホストに向けて接続し直す
+        connectToHostId(nextHost.peerId);
+    }
 }
 
 function resetToSetup() {
+    isHost = false;
     gameState.started = false;
     gameState.roundOver = false;
     gameState.matchOver = false;
     gameState.players = [];
     if(connToHost) { connToHost.close(); connToHost = null; }
+    connections.forEach(c => c.close());
+    connections = [];
     document.getElementById('setup-container').style.display = 'block';
     document.getElementById('game-container').style.display = 'none';
     document.getElementById('role-display').innerText = "-";
@@ -228,6 +288,7 @@ function kickPlayer(targetPeerId, targetName) {
 }
 
 function handleDisconnect(peerId) {
+    // ホストがゲストの切断を検知した場合
     const player = gameState.players.find(p => p.peerId === peerId);
     if (player) {
         pushLog(`[切断] ${player.name} の接続が切れました。`);
@@ -236,6 +297,9 @@ function handleDisconnect(peerId) {
         } else {
             gameState.players = gameState.players.filter(p => p.peerId !== peerId); 
         }
+        
+        // コネクション配列からも削除
+        connections = connections.filter(c => c.peer !== peerId);
         broadcastState();
     }
 }
@@ -246,6 +310,10 @@ function handleDataFromGuest(data, conn) {
             gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false, score: 0 });
             pushLog(`[参加] ${data.name} が参加しました。`);
         }
+        // 新ホスト移行直後のゲスト再接続の場合、既存のコネクション情報を上書き確保
+        if (!connections.some(c => c.peer === conn.peer)) {
+            connections.push(conn);
+        }
         broadcastState();
     }
     if (data.type === 'ACTION') {
@@ -254,6 +322,7 @@ function handleDataFromGuest(data, conn) {
 }
 
 function broadcastState() {
+    if (!isHost) return;
     connections.forEach(conn => {
         if(conn.open) conn.send({ type: 'SYNC', state: gameState });
     });
@@ -267,7 +336,6 @@ function pushLog(msg) {
 
 function hostStartGame() {
     if(gameState.players.length < 2) return alert("2人以上いないと始められません！");
-    document.getElementById('start-game-btn').style.display = 'none';
     gameState.players.forEach(p => p.score = 0);
     gameState.matchOver = false;
     startNewRound();
@@ -287,21 +355,16 @@ function startNewRound() {
     
     gameState.turnIndex = 0;
     pushLog(`[開始] ラウンドが開始されました！(3点先取)`);
-    startTurn();
+    broadcastState();
 }
 
 function hostNextRound() {
     if(!isHost || !gameState.roundOver || gameState.matchOver) return;
-    document.getElementById('next-round-btn').style.display = 'none';
     startNewRound();
 }
 
 function hostResetEntireGame() {
     if(!isHost) return;
-    document.getElementById('next-round-btn').style.display = 'none';
-    document.getElementById('reset-game-btn').style.display = 'none';
-    document.getElementById('start-game-btn').style.display = 'block';
-    
     gameState.started = false;
     gameState.roundOver = false;
     gameState.matchOver = false;
@@ -345,6 +408,13 @@ function updateUI() {
 
     document.getElementById("deck-count").innerText = `山札: ${gameState.deck ? gameState.deck.length : 0}枚`;
 
+    // ロール表示の更新
+    if (isHost) {
+        document.getElementById('role-display').innerText = `部屋の主 (部屋ID: ${gameState.hostPeerId || myId})`;
+    } else {
+        document.getElementById('role-display').innerText = `ゲスト参加中 (部屋ID: ${currentHostId})`;
+    }
+
     const listEl = document.getElementById("player-list");
     listEl.innerHTML = "";
     
@@ -354,11 +424,14 @@ function updateUI() {
         if (p.protected) statusText += " (ガード状態)";
         if (p.alive && p.peerId === myId && gameState.started && !gameState.roundOver) statusText += ` (手札:${p.hand.length}枚)`;
 
+        // ホスト（部屋の主）の名前の横にクラウンマークを付与
+        const hostMark = (p.peerId === gameState.hostPeerId) ? "👑" : "";
+
         const item = document.createElement("div");
         item.className = `player-item ${isCurrent ? 'active' : ''} ${(!p.alive && gameState.started) ? 'eliminated' : ''}`;
         
         const infoSpan = document.createElement("span");
-        infoSpan.innerHTML = `<span>${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> 
+        infoSpan.innerHTML = `<span>${hostMark}${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> 
                               <span class="score-badge">${p.score}pt</span>
                               <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
         item.appendChild(infoSpan);
@@ -374,8 +447,14 @@ function updateUI() {
         listEl.appendChild(item);
     });
 
+    // ホスト用のコントロールボタン
     if (isHost) {
-        if (gameState.roundOver) {
+        if (!gameState.started && !gameState.roundOver) {
+            document.getElementById('start-game-btn').style.display = 'block';
+            document.getElementById('next-round-btn').style.display = 'none';
+            document.getElementById('reset-game-btn').style.display = 'none';
+        } else if (gameState.roundOver) {
+            document.getElementById('start-game-btn').style.display = 'none';
             if (gameState.matchOver) {
                 document.getElementById('next-round-btn').style.display = 'none';
                 document.getElementById('reset-game-btn').style.display = 'block';
@@ -384,9 +463,14 @@ function updateUI() {
                 document.getElementById('reset-game-btn').style.display = 'block';
             }
         } else {
+            document.getElementById('start-game-btn').style.display = 'none';
             document.getElementById('next-round-btn').style.display = 'none';
             document.getElementById('reset-game-btn').style.display = 'none';
         }
+    } else {
+        document.getElementById('start-game-btn').style.display = 'none';
+        document.getElementById('next-round-btn').style.display = 'none';
+        document.getElementById('reset-game-btn').style.display = 'none';
     }
 
     const cardArea = document.getElementById("card-area");
@@ -475,7 +559,11 @@ function sendAction(action) {
     if (isHost) {
         resolveAction(action);
     } else {
-        connToHost.send({ type: 'ACTION', action: action });
+        if(connToHost && connToHost.open) {
+            connToHost.send({ type: 'ACTION', action: action });
+        } else {
+            alert("ホストとの通信が切れているため行動できません。");
+        }
     }
 }
 
