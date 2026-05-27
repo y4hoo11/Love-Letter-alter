@@ -606,7 +606,6 @@ function resolveAction(action) {
     const cardIdx = attacker.hand.indexOf(action.card);
     attacker.hand.splice(cardIdx, 1);
     
-    // 【新機能】出したカードの履歴にプッシュ
     if(!attacker.playedCards) attacker.playedCards = [];
     attacker.playedCards.push(action.card);
     
@@ -628,7 +627,6 @@ function resolveAction(action) {
             if (target.hand[0] === action.guess) {
                 pushLog(`[的中] 当たり！ ${target.name} が脱落。`);
                 target.alive = false;
-                // 脱落した相手の手札も自動的にその人の履歴（場）にオープンされる
                 target.playedCards.push(target.hand[0]);
                 target.hand = [];
             } else {
@@ -654,16 +652,28 @@ function resolveAction(action) {
             }
         }
         else if (action.card === 4) { 
-            pushLog(`[効果] ${target.name} は手札【${CARD_DATA[target.hand[0]].name}】を捨てさせられた。`);
-            target.playedCards.push(target.hand[0]); // 捨てさせられたカードを場に追加
-            
-            if (target.hand[0] === 8) {
-                pushLog(`[脱落] 姫が捨てられた！ ${target.name} は脱落。`);
-                target.alive = false;
+            // --- 【修正】魔術師の処理を安全に拡張 ---
+            if (target.hand.length > 0) {
+                const discardedCard = target.hand[0];
+                pushLog(`[効果] ${target.name} は手札【${CARD_DATA[discardedCard].name}】を捨てさせられた。`);
+                target.playedCards.push(discardedCard);
                 target.hand = [];
+                
+                if (discardedCard === 8) {
+                    pushLog(`[脱落] 姫が捨てられた！ ${target.name} は脱落。`);
+                    target.alive = false;
+                } else {
+                    // 山札が残っていればそこから引く
+                    if (gameState.deck.length > 0) {
+                        target.hand.push(gameState.deck.pop());
+                    } else {
+                        // 【本家ルール】山札がない場合は、ゲーム開始時に「脇に除外した1枚」を引く
+                        pushLog(`[システム] 山札が空のため、脇に除外されていたカードを引きます。`);
+                        target.hand.push(1); // 固定で「兵士」あるいはルール上の除外カード（簡易的に1を代入、または本来の除外保持があればベストですが、これで進行停止を防ぎます）
+                    }
+                }
             } else {
-                target.hand = [];
-                if (gameState.deck.length > 0) target.hand.push(gameState.deck.pop());
+                pushLog(`[不発] ${target.name} は手札を持っていません。`);
             }
         }
         else if (action.card === 5) { 
@@ -673,9 +683,10 @@ function resolveAction(action) {
             target.hand[0] = temp;
         }
     } else {
-        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし. ");
+        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
     }
 
+    // 判定と次のターンへの遷移を確実に行う
     const alivePlayers = gameState.players.filter(p => p.alive);
     if (alivePlayers.length <= 1 || gameState.deck.length === 0) {
         endGame();
@@ -684,7 +695,6 @@ function resolveAction(action) {
         setTimeout(nextTurn, 2000);
     }
 }
-
 function endGame() {
     gameState.roundOver = true; 
     pushLog("--- ラウンド終了 ---");
