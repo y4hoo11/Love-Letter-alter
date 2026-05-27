@@ -38,20 +38,23 @@
 <body>
 
 <h1>ラブレター オンライン</h1>
-<div id="my-peer-id" style="font-size: 0.8rem; color: #bdc3c7; margin-bottom: 10px;">接続準備中...</div>
+<div id="my-peer-id" style="font-size: 0.8rem; color: #bdc3c7; margin-bottom: 10px;">部屋ID生成中...</div>
 
 <div id="setup-container">
     <div class="input-group">
         <label>あなたの名前:</label>
         <input type="text" id="name-input" value="プレイヤー">
     </div>
+    
     <div class="input-group" id="host-setup">
         <button onclick="beHost()">親（ホスト）として部屋を作る</button>
     </div>
+    
     <hr style="border: 0; border-top: 1px solid #7f8c8d; margin: 20px 0;">
+    
     <div class="input-group">
-        <label>参加する部屋のID (ホストのID):</label>
-        <input type="text" id="room-id-input" placeholder="ここにホストのIDを貼り付け">
+        <label>参加する部屋のID (数字8桁):</label>
+        <input type="text" id="room-id-input" placeholder="ここに8桁の部屋IDを入力">
         <button class="btn-secondary" style="margin-top: 10px;" onclick="joinRoom()">子（ゲスト）として参加する</button>
     </div>
 </div>
@@ -85,7 +88,7 @@ const CARD_DATA = {
     8: { name: "姫", effect: "手札から捨てると即脱落する" }
 };
 const ORIGINAL_DECK = [1,1,1,1,1, 2,2, 3,3, 4,4, 5, 8]; 
-const WINNING_SCORE = 3; // 3ポイント先取
+const WINNING_SCORE = 3; 
 
 let peer = null;
 let connections = []; 
@@ -96,31 +99,39 @@ let myName = "";
 
 let gameState = {
     started: false,
-    roundOver: false, // ラウンドが終了したかフラグ
-    matchOver: false, // 3点先取されて完全決着したかフラグ
+    roundOver: false, 
+    matchOver: false, 
     deck: [],
-    players: [], // { peerId, name, hand:[], alive:true, protected:false, score:0 }
+    players: [], 
     turnIndex: 0,
     logs: []
 };
 
-peer = new Peer({
+// 【重要】8桁のランダムな数字を生成 (10000000 ～ 99999999)
+const customRoomId = String(Math.floor(10000000 + Math.random() * 90000000));
+
+// 生成した8桁のIDをPeerJSの識別子として固定して初期化
+peer = new Peer(customRoomId, {
     config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
 });
 
 peer.on('open', (id) => {
     myId = id;
-    document.getElementById('my-peer-id').innerText = `あなたの通信ID: ${id} (タップでコピー)`;
+    document.getElementById('my-peer-id').innerText = `あなたの部屋ID: ${id} (タップでコピー)`;
 });
 
 peer.on('error', (err) => {
-    alert("通信エラーが発生しました: " + err.type);
+    if (err.type === 'unavailable-id') {
+        alert("部屋IDがすでに使われていました。ページを再読み込みしてください。");
+    } else {
+        alert("通信エラーが発生しました: " + err.type);
+    }
     console.error(err);
 });
 
 document.getElementById('my-peer-id').onclick = () => {
     navigator.clipboard.writeText(myId);
-    alert("IDをコピーしました！友達に送ってください。");
+    alert("部屋IDをコピーしました！友達に送ってください。");
 };
 
 function beHost() {
@@ -131,7 +142,7 @@ function beHost() {
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
     document.getElementById('start-game-btn').style.display = 'block';
-    document.getElementById('role-display').innerText = "部屋の主 (ホスト)";
+    document.getElementById('role-display').innerText = `部屋の主 (部屋ID: ${myId})`;
     
     peer.on('connection', (conn) => {
         if (gameState.started) {
@@ -142,13 +153,13 @@ function beHost() {
         conn.on('data', (data) => handleDataFromGuest(data, conn));
         conn.on('close', () => handleDisconnect(conn.peer));
     });
-    pushLog("[部屋作成] 部屋を作成しました。参加者を待っています...");
+    pushLog(`[部屋作成] 部屋（ID: ${myId}）を作成しました。参加者を待っています...`);
     updateUI();
 }
 
 function joinRoom() {
     const hostId = document.getElementById('room-id-input').value.trim();
-    if(!hostId) return alert("ホストのIDを入力してください");
+    if(!hostId) return alert("ホストの8桁の部屋IDを入力してください");
     myName = document.getElementById('name-input').value;
     
     connToHost = peer.connect(hostId);
@@ -156,7 +167,7 @@ function joinRoom() {
     connToHost.on('open', () => {
         document.getElementById('setup-container').style.display = 'none';
         document.getElementById('game-container').style.display = 'block';
-        document.getElementById('role-display').innerText = "ゲスト参加中";
+        document.getElementById('role-display').innerText = `ゲスト参加中 (部屋ID: ${hostId})`;
         connToHost.send({ type: 'JOIN', name: myName });
     });
     
@@ -167,7 +178,7 @@ function joinRoom() {
         }
         if (data.type === 'ALERT') alert(data.msg);
         if (data.type === 'KICK') {
-            alert(data.msg || "ホストによって部屋から退出させられました。");
+            alert(data.msg || "部屋から退出させられました。");
             resetToSetup();
         }
     });
@@ -179,7 +190,7 @@ function joinRoom() {
 
     setTimeout(() => {
         if (document.getElementById('setup-container').style.display !== 'none') {
-            alert("ホストに接続できませんでした。");
+            alert("指定された部屋IDが見つからないか、接続できませんでした。番号が合っているか確認してください。");
         }
     }, 5000);
 }
@@ -254,24 +265,19 @@ function pushLog(msg) {
     if(gameState.logs.length > 20) gameState.logs.shift();
 }
 
-// 【ホスト】最初の完全なゲーム開始
 function hostStartGame() {
     if(gameState.players.length < 2) return alert("2人以上いないと始められません！");
     document.getElementById('start-game-btn').style.display = 'none';
-    
-    // 全員のスコアをリセット
     gameState.players.forEach(p => p.score = 0);
     gameState.matchOver = false;
-    
     startNewRound();
 }
 
-// 【ホスト】新しいラウンドのカード配布処理
 function startNewRound() {
     gameState.started = true;
     gameState.roundOver = false;
     gameState.deck = [...ORIGINAL_DECK].sort(() => Math.random() - 0.5);
-    gameState.deck.pop(); // 1枚除外
+    gameState.deck.pop(); 
     
     gameState.players.forEach(p => {
         p.hand = [gameState.deck.pop()];
@@ -284,14 +290,12 @@ function startNewRound() {
     startTurn();
 }
 
-// 【ホスト】次のラウンドへ進む（リザルト画面から次へ）
 function hostNextRound() {
     if(!isHost || !gameState.roundOver || gameState.matchOver) return;
     document.getElementById('next-round-btn').style.display = 'none';
     startNewRound();
 }
 
-// 【ホスト】ゲームの完全リセット
 function hostResetEntireGame() {
     if(!isHost) return;
     document.getElementById('next-round-btn').style.display = 'none';
@@ -329,7 +333,7 @@ function startTurn() {
 }
 
 function nextTurn() {
-    if (gameState.roundOver) return; // ラウンドが終わってたら次に行かない
+    if (gameState.roundOver) return; 
     gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
     startTurn();
 }
@@ -359,7 +363,6 @@ function updateUI() {
                               <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
         item.appendChild(infoSpan);
 
-        // キックボタン（ゲーム開始前のみ表示可能にする）
         if (isHost && p.peerId !== myId && !gameState.started) {
             const kickBtn = document.createElement("button");
             kickBtn.className = "btn-danger";
@@ -371,7 +374,6 @@ function updateUI() {
         listEl.appendChild(item);
     });
 
-    // ホスト用のコントロールボタン表示制御
     if (isHost) {
         if (gameState.roundOver) {
             if (gameState.matchOver) {
@@ -387,12 +389,10 @@ function updateUI() {
         }
     }
 
-    // 手札エリアの表示
     const cardArea = document.getElementById("card-area");
     cardArea.innerHTML = "";
     const me = gameState.players.find(p => p.peerId === myId);
     
-    // ラウンド進行中のみ手札を見せる
     if (me && me.alive && gameState.started && !gameState.roundOver) {
         document.getElementById("hand-title").style.display = "block";
         const isMyTurn = gameState.players[gameState.turnIndex].peerId === myId;
@@ -417,11 +417,7 @@ function updateUI() {
 }
 
 function selectCard(handIdx, cardNum) {
-    if (cardNum === 8) { 
-        sendAction({ type: 'PLAY', card: cardNum, targetId: null });
-        return;
-    }
-    if (cardNum === 2) { 
+    if (cardNum === 8 || cardNum === 2) { 
         sendAction({ type: 'PLAY', card: cardNum, targetId: null });
         return;
     }
@@ -484,7 +480,7 @@ function sendAction(action) {
 }
 
 function resolveAction(action) {
-    if (gameState.roundOver) return; // すでに終わってたら処理しない
+    if (gameState.roundOver) return;
 
     const attacker = gameState.players[gameState.turnIndex];
     const cardIdx = attacker.hand.indexOf(action.card);
@@ -546,7 +542,6 @@ function resolveAction(action) {
         if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
     }
 
-    // 生存チェック
     const alivePlayers = gameState.players.filter(p => p.alive);
     if (alivePlayers.length <= 1 || gameState.deck.length === 0) {
         endGame();
@@ -557,13 +552,12 @@ function resolveAction(action) {
 }
 
 function endGame() {
-    gameState.roundOver = true; // ラウンド終了フラグを立てる
+    gameState.roundOver = true; 
     pushLog("--- ラウンド終了 ---");
     
     let roundWinner = null;
     let maxCard = -1;
 
-    // 手札の公開と勝者判定
     gameState.players.forEach(p => {
         if (p.alive) {
             const card = p.hand[0] || 0;
@@ -576,10 +570,9 @@ function endGame() {
     });
 
     if (roundWinner) {
-        roundWinner.score += 1; // ポイント加算
+        roundWinner.score += 1; 
         pushLog(`[目標] ${roundWinner.name} がこのラウンドを獲得！(+1pt)`);
         
-        // 3ポイント先取したかチェック
         if (roundWinner.score >= WINNING_SCORE) {
             gameState.matchOver = true;
             pushLog(`🏆🎉【最終勝者】${roundWinner.name} が 3点先取し、ゲームを制しました！！`);
@@ -588,7 +581,6 @@ function endGame() {
         pushLog("[結果] 生存者がおらず、このラウンドは引き分けです。");
     }
     
-    // 【最重要】ログをすべて書き終えたあとにデータを全送信（これで対戦相手にリザルトが確実に同期する）
     broadcastState();
 }
 </script>
