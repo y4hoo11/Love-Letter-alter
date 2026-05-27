@@ -1,0 +1,176 @@
+body {
+    font-family: sans-serif;
+    background-color: #2c3e50;
+    color: #ecf0f1;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+h1 {
+    color: #f1c40f;
+    margin-bottom: 5px;
+}
+#my-peer-id {
+    font-size: 0.8rem;
+    color: #bdc3c7;
+    margin-bottom: 10px;
+    cursor: pointer;
+}
+#setup-container, #game-container {
+    width: 100%;
+    max-width: 500px;
+    background: #34495e;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    margin-bottom: 15px;
+}
+.input-group {
+    margin-bottom: 15px;
+}
+input, button {
+    width: 100%;
+    padding: 10px;
+    box-sizing: border-box;
+    border-radius: 5px;
+    border: none;
+    font-size: 1rem;
+    margin-top: 5px;
+}
+button {
+    background: #2ecc71;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+button:hover {
+    background: #27ae60;
+}
+.btn-secondary {
+    background: #3498db;
+}
+.btn-secondary:hover {
+    background: #2980b9;
+}
+.btn-danger {
+    background: #e74c3c;
+    width: auto;
+    padding: 3px 8px;
+    font-size: 0.8rem;
+    margin: 0;
+    margin-left: 10px;
+}
+.btn-danger:hover {
+    background: #c0392b;
+}
+.status-panel {
+    background: #1a252f;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 15px;
+    font-size: 0.9rem;
+    display: flex;
+    justify-content: space-between;
+}
+.player-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px;
+    border-bottom: 1px solid #34495e;
+    background: #2c3e50;
+    margin-bottom: 5px;
+    border-radius: 3px;
+}
+.player-item.active {
+    border: 2px solid #2ecc71;
+    color: #2ecc71;
+    font-weight: bold;
+}
+.player-item.eliminated {
+    color: #e74c3c;
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+.log-box {
+    height: 120px;
+    overflow-y: auto;
+    background: #1a252f;
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 0.85rem;
+    margin-bottom: 15px;
+    border: 1px solid #7f8c8d;
+}
+.card-area {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 15px;
+    min-height: 160px;
+}
+.card {
+    width: 110px;
+    height: 160px;
+    background: #e74c3c;
+    border: 2px solid #fff;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+.card:hover {
+    transform: translateY(-5px);
+}
+.card-num {
+    font-size: 1.4rem;
+    font-weight: bold;
+}
+.card-name {
+    font-size: 1rem;
+    text-align: center;
+    font-weight: bold;
+}
+.card-effect {
+    font-size: 0.65rem;
+    background: rgba(0,0,0,0.2);
+    padding: 3px;
+    border-radius: 3px;
+}
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.8);
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+}
+.modal-content {
+    background: #34495e;
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    max-width: 300px;
+    width: 80%;
+}
+.modal button {
+    margin: 5px 0;
+}
+.score-badge {
+    background: #f1c40f;
+    color: #2c3e50;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: bold;
+    font-size: 0.8rem;
+    margin-left: 5px;
+}
