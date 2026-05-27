@@ -6,6 +6,8 @@ const CARD_DATA = {
     5: { name: "将軍", effect: "相手と手札を交換する" },
     8: { name: "姫", effect: "手札から捨てると即脱落する" }
 };
+// デッキに含まれる各カードの初期枚数
+const CARD_COUNTS = { 1: 5, 2: 2, 3: 2, 4: 2, 5: 1, 8: 1 };
 const ORIGINAL_DECK = [1,1,1,1,1, 2,2, 3,3, 4,4, 5, 8]; 
 const WINNING_SCORE = 3; 
 
@@ -22,13 +24,12 @@ let gameState = {
     roundOver: false, 
     matchOver: false, 
     deck: [],
-    players: [], 
+    players: [], // { peerId, name, hand:[], playedCards:[], alive:true, protected:false, score:0 }
     turnIndex: 0,
     logs: [],
     hostPeerId: "" 
 };
 
-// 8桁のランダムな数字を生成 (10000000 ～ 99999999)
 const customRoomId = String(Math.floor(10000000 + Math.random() * 90000000));
 
 peer = new Peer(customRoomId, {
@@ -59,7 +60,7 @@ function beHost() {
     currentHostId = myId;
     gameState.hostPeerId = myId;
     myName = document.getElementById('name-input').value;
-    gameState.players = [{ peerId: myId, name: myName, hand: [], alive: true, protected: false, score: 0 }];
+    gameState.players = [{ peerId: myId, name: myName, hand: [], playedCards: [], alive: true, protected: false, score: 0 }];
     
     document.getElementById('setup-container').style.display = 'none';
     document.getElementById('game-container').style.display = 'block';
@@ -81,7 +82,6 @@ function setupHostConnectionListener() {
     });
 }
 
-// 参加する前に部屋が開いているか確認する処理
 function joinRoom() {
     const hostId = document.getElementById('room-id-input').value.trim();
     if(!hostId) return alert("ホストの8桁の部屋IDを入力してください");
@@ -90,7 +90,6 @@ function joinRoom() {
     joinBtn.innerText = "接続確認中...";
     joinBtn.disabled = true;
 
-    // 一時的な接続テスト
     let isConnectedSuccessfully = false;
     const testConn = peer.connect(hostId);
     
@@ -108,7 +107,6 @@ function joinRoom() {
         clearTimeout(timeout);
         testConn.close(); 
         
-        // 正規接続を開始
         myName = document.getElementById('name-input').value;
         currentHostId = hostId;
         connectToHostId(hostId);
@@ -167,7 +165,27 @@ function becomeNewHost() {
     pushLog(`[システム] あなたが新しいホスト（部屋の主）になりました。`);
     connections = [];
     setupHostConnectionListener();
+    // 既存の他のプレイヤーへ再接続権を促すためブロードキャスト
     broadcastState();
+}
+
+// 任意でホスト権限を誰かに譲渡する（親から呼び出し）
+function transferHost(targetPeerId, targetName) {
+    if (!isHost) return;
+    if (confirm(`${targetName} さんにホスト権限を渡しますか？`)) {
+        pushLog(`[ホスト交代] ${myName} から ${targetName} へホスト権限が譲渡されました。`);
+        gameState.hostPeerId = targetPeerId;
+        
+        // 自分がゲスト側へ転向する
+        isHost = false;
+        connections = [];
+        
+        // 全員同期させた後に正規接続を張り替える
+        broadcastState();
+        setTimeout(() => {
+            connectToHostId(targetPeerId);
+        }, 500);
+    }
 }
 
 function handleHostFailure() {
@@ -242,7 +260,7 @@ function handleDisconnect(peerId) {
 function handleDataFromGuest(data, conn) {
     if (data.type === 'JOIN') {
         if(!gameState.players.some(p => p.peerId === conn.peer)) {
-            gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false, score: 0 });
+            gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], playedCards: [], alive: true, protected: false, score: 0 });
             pushLog(`[参加] ${data.name} が参加しました。`);
         }
         if (!connections.some(c => c.peer === conn.peer)) {
@@ -279,10 +297,11 @@ function startNewRound() {
     gameState.started = true;
     gameState.roundOver = false;
     gameState.deck = [...ORIGINAL_DECK].sort(() => Math.random() - 0.5);
-    gameState.deck.pop(); 
+    gameState.deck.pop(); // ルール通り1枚を脇に除外
     
     gameState.players.forEach(p => {
         p.hand = [gameState.deck.pop()];
+        p.playedCards = []; // 出したカードの履歴を初期化
         p.alive = true;
         p.protected = false;
     });
@@ -305,6 +324,7 @@ function hostResetEntireGame() {
     gameState.players.forEach(p => {
         p.score = 0;
         p.hand = [];
+        p.playedCards = [];
         p.alive = true;
     });
     pushLog("[リセット] ゲームが完全にリセットされました。");
@@ -336,6 +356,7 @@ function nextTurn() {
 }
 
 function updateUI() {
+    // ログ表示
     const logBox = document.getElementById("log-box");
     logBox.innerHTML = gameState.logs.map(l => `<div>${l}</div>`).join('');
     logBox.scrollTop = logBox.scrollHeight;
@@ -348,6 +369,15 @@ function updateUI() {
         document.getElementById('role-display').innerText = `ゲスト参加中 (部屋ID: ${currentHostId})`;
     }
 
+    // 各カードの全体使用枚数をカウント
+    const totalUsedCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 8: 0 };
+    gameState.players.forEach(p => {
+        if(p.playedCards) {
+            p.playedCards.forEach(cNum => { totalUsedCounts[cNum]++; });
+        }
+    });
+
+    // プレイヤーリスト・対戦エリアの描画
     const listEl = document.getElementById("player-list");
     listEl.innerHTML = "";
     
@@ -355,30 +385,80 @@ function updateUI() {
         const isCurrent = idx === gameState.turnIndex && gameState.started && !gameState.roundOver;
         let statusText = p.alive ? "生存" : "脱落";
         if (p.protected) statusText += " (ガード状態)";
-        if (p.alive && p.peerId === myId && gameState.started && !gameState.roundOver) statusText += ` (手札:${p.hand.length}枚)`;
 
         const hostMark = (p.peerId === gameState.hostPeerId) ? "👑" : "";
 
+        // プレイヤー1人分のボード枠
         const item = document.createElement("div");
         item.className = `player-item ${isCurrent ? 'active' : ''} ${(!p.alive && gameState.started) ? 'eliminated' : ''}`;
         
+        // ヘッダー部分情報
+        const header = document.createElement("div");
+        header.className = "player-header";
+        
         const infoSpan = document.createElement("span");
-        infoSpan.innerHTML = `<span>${hostMark}${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> 
+        infoSpan.innerHTML = `<strong>${hostMark}${p.name}</strong> ${p.peerId === myId ? '<span style="color:#2ecc71;">(あなた)</span>' : ''}
                               <span class="score-badge">${p.score}pt</span>
-                              <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
-        item.appendChild(infoSpan);
+                              <span style="margin-left:10px; font-size:0.8rem; color:#bdc3c7;">[${statusText}]</span>`;
+        header.appendChild(infoSpan);
 
-        if (isHost && p.peerId !== myId && !gameState.started) {
-            const kickBtn = document.createElement("button");
-            kickBtn.className = "btn-danger";
-            kickBtn.innerText = "キック";
-            kickBtn.onclick = () => kickPlayer(p.peerId, p.name);
-            item.appendChild(kickBtn);
+        // ボタン操作コンテナ（ホスト用キック・権限委譲）
+        const actionBtnContainer = document.createElement("div");
+        if (isHost && p.peerId !== myId) {
+            // ホスト譲渡ボタン
+            const transBtn = document.createElement("button");
+            transBtn.className = "btn-host-transfer";
+            transBtn.innerText = "👑譲渡";
+            transBtn.onclick = () => transferHost(p.peerId, p.name);
+            actionBtnContainer.appendChild(transBtn);
+
+            // キックボタン（開始前のみ表示）
+            if(!gameState.started) {
+                const kickBtn = document.createElement("button");
+                kickBtn.className = "btn-danger";
+                kickBtn.innerText = "キック";
+                kickBtn.onclick = () => kickPlayer(p.peerId, p.name);
+                actionBtnContainer.appendChild(kickBtn);
+            }
         }
+        header.appendChild(actionBtnContainer);
+        item.appendChild(header);
+
+        // 相手の「手札の上の並び（手札枚数の可視化）」
+        if (gameState.started && !gameState.roundOver && p.alive) {
+            const handContainer = document.createElement("div");
+            handContainer.className = "enemy-hand-container";
+            
+            // 自分以外ならトランプの裏面のように枚数分並べる
+            const handSize = p.hand ? p.hand.length : 0;
+            for(let i = 0; i < handSize; i++) {
+                const cardBack = document.createElement("div");
+                cardBack.className = "card-back";
+                handContainer.appendChild(cardBack);
+            }
+            item.appendChild(handContainer);
+        }
+
+        // 各プレイヤーの「出したカードの順番履歴（場・捨て場）」
+        const historyContainer = document.createElement("div");
+        historyContainer.className = "played-history";
+        
+        if (p.playedCards && p.playedCards.length > 0) {
+            p.playedCards.forEach(cNum => {
+                const hCard = document.createElement("div");
+                hCard.className = "history-card";
+                hCard.innerHTML = `<div>${cNum}</div><div class="h-name">${CARD_DATA[cNum].name}</div>`;
+                historyContainer.appendChild(hCard);
+            });
+        } else {
+            historyContainer.innerHTML = `<span style="font-size:0.75rem; color:#7f8c8d; padding-left:5px;">まだカードを出していません</span>`;
+        }
+        item.appendChild(historyContainer);
 
         listEl.appendChild(item);
     });
 
+    // ホスト用の管理ボタン制御
     if (isHost) {
         if (!gameState.started && !gameState.roundOver) {
             document.getElementById('start-game-btn').style.display = 'block';
@@ -404,6 +484,7 @@ function updateUI() {
         document.getElementById('reset-game-btn').style.display = 'none';
     }
 
+    // 自分の手札カードエリアのレンダリング
     const cardArea = document.getElementById("card-area");
     cardArea.innerHTML = "";
     const me = gameState.players.find(p => p.peerId === myId);
@@ -429,6 +510,26 @@ function updateUI() {
     } else {
         document.getElementById("hand-title").style.display = "none";
     }
+
+    // 画面最下部のカードトラッカー（全使用状況）の更新
+    const trackerListEl = document.getElementById("card-tracker-list");
+    trackerListEl.innerHTML = "";
+    
+    [1, 2, 3, 4, 5, 8].forEach(cNum => {
+        const usedCount = totalUsedCounts[cNum];
+        const maxCount = CARD_COUNTS[cNum];
+        const isUsedUp = usedCount >= maxCount;
+
+        const trackerItem = document.createElement("div");
+        trackerItem.className = `tracker-item ${isUsedUp ? 'used-up' : ''}`;
+        
+        trackerItem.innerHTML = `
+            <div class="tracker-num">${cNum}</div>
+            <div class="tracker-name">${CARD_DATA[cNum].name}</div>
+            <div class="tracker-count">${usedCount} / ${maxCount}</div>
+        `;
+        trackerListEl.appendChild(trackerItem);
+    });
 }
 
 function selectCard(handIdx, cardNum) {
@@ -505,6 +606,10 @@ function resolveAction(action) {
     const cardIdx = attacker.hand.indexOf(action.card);
     attacker.hand.splice(cardIdx, 1);
     
+    // 【新機能】出したカードの履歴にプッシュ
+    if(!attacker.playedCards) attacker.playedCards = [];
+    attacker.playedCards.push(action.card);
+    
     pushLog(`[プレイ] ${attacker.name} が 【${CARD_DATA[action.card].name}】 を使用。`);
 
     const target = gameState.players.find(p => p.peerId === action.targetId);
@@ -523,6 +628,9 @@ function resolveAction(action) {
             if (target.hand[0] === action.guess) {
                 pushLog(`[的中] 当たり！ ${target.name} が脱落。`);
                 target.alive = false;
+                // 脱落した相手の手札も自動的にその人の履歴（場）にオープンされる
+                target.playedCards.push(target.hand[0]);
+                target.hand = [];
             } else {
                 pushLog("[結果] ハズレ！ 効果はありません。");
             }
@@ -534,18 +642,25 @@ function resolveAction(action) {
             if (p1 > p2) {
                 pushLog(`[結果] ${attacker.name} の勝利！ ${target.name} が脱落。`);
                 target.alive = false;
+                target.playedCards.push(target.hand[0]);
+                target.hand = [];
             } else if (p1 < p2) {
                 pushLog(`[結果] ${target.name} の勝利！ ${attacker.name} が脱落。`);
                 attacker.alive = false;
+                attacker.playedCards.push(attacker.hand[0]);
+                attacker.hand = [];
             } else {
                 pushLog("[結果] 引き分け！");
             }
         }
         else if (action.card === 4) { 
             pushLog(`[効果] ${target.name} は手札【${CARD_DATA[target.hand[0]].name}】を捨てさせられた。`);
+            target.playedCards.push(target.hand[0]); // 捨てさせられたカードを場に追加
+            
             if (target.hand[0] === 8) {
                 pushLog(`[脱落] 姫が捨てられた！ ${target.name} は脱落。`);
                 target.alive = false;
+                target.hand = [];
             } else {
                 target.hand = [];
                 if (gameState.deck.length > 0) target.hand.push(gameState.deck.pop());
