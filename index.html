@@ -37,6 +37,7 @@
         <span id="deck-count">山札: --枚</span>
         <span id="role-display" style="color: #f1c40f;">-</span>
     </div>
+    
     <div id="player-list"></div>
     
     <button id="start-game-btn" style="display: none; margin: 10px 0;" onclick="hostStartGame()">ゲームを開始する</button>
@@ -47,6 +48,11 @@
     
     <h3 id="hand-title" style="text-align:center; margin: 10px 0; display:none;">あなたの手札</h3>
     <div class="card-area" id="card-area"></div>
+
+    <div id="card-tracker-container">
+        <h3>全カードの使用状況 (使われたカードは暗くなります)</h3>
+        <div id="card-tracker-list"></div>
+    </div>
 </div>
 
 <div id="target-modal" class="modal">
