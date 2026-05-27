@@ -127,16 +127,15 @@ function beHost() {
     document.getElementById('role-display').innerText = "部屋の主 (ホスト)";
     
     peer.on('connection', (conn) => {
-        // すでにゲームが始まっていたら拒否
         if (gameState.started) {
-            setTimeout(() => { conn.send({ type: 'KICK', msg: 'すでにゲームが開始されています。' }); }, 500);
+            setTimeout(() => { conn.send({ type: 'KICK', msg: '[システム] すでにゲームが開始されています。' }); }, 500);
             return;
         }
         connections.push(conn);
         conn.on('data', (data) => handleDataFromGuest(data, conn));
         conn.on('close', () => handleDisconnect(conn.peer));
     });
-    pushLog("🏠 部屋を作成しました。誰かが入るのを待っています...");
+    pushLog("[部屋作成] 部屋を作成しました。参加者を待っています...");
     updateUI();
 }
 
@@ -178,7 +177,6 @@ function joinRoom() {
     }, 5000);
 }
 
-// 初期画面（ロビー）に戻る処理
 function resetToSetup() {
     gameState.started = false;
     gameState.players = [];
@@ -188,22 +186,18 @@ function resetToSetup() {
     document.getElementById('role-display').innerText = "-";
 }
 
-// 【ホスト限定】プレイヤーをキックする関数
 function kickPlayer(targetPeerId, targetName) {
     if (!isHost) return;
     if (confirm(`${targetName} さんをキックしますか？`)) {
-        // 対象のコネクションを探して通知を送り、切断する
         const connIdx = connections.findIndex(c => c.peer === targetPeerId);
         if (connIdx !== -1) {
             connections[connIdx].send({ type: 'KICK', msg: 'ホストによってキックされました。' });
             connections[connIdx].close();
             connections.splice(connIdx, 1);
         }
-        // プレイヤーリストから削除
         gameState.players = gameState.players.filter(p => p.peerId !== targetPeerId);
-        pushLog(`👢 ${targetName} がホストによってキックされました。`);
+        pushLog(`[退室] ${targetName} がホストによってキックされました。`);
         
-        // もしゲーム中にキックした場合のターン補正
         if (gameState.started) {
             if (gameState.turnIndex >= gameState.players.length) {
                 gameState.turnIndex = 0;
@@ -213,15 +207,14 @@ function kickPlayer(targetPeerId, targetName) {
     }
 }
 
-// 通信が自然に切れた場合の処理
 function handleDisconnect(peerId) {
     const player = gameState.players.find(p => p.peerId === peerId);
     if (player) {
-        pushLog(`🔌 ${player.name} の接続が切れました。`);
+        pushLog(`[切断] ${player.name} の接続が切れました。`);
         if (gameState.started) {
-            player.alive = false; // ゲーム中は脱落扱いにする
+            player.alive = false; 
         } else {
-            gameState.players = gameState.players.filter(p => p.peerId !== peerId); // 開始前ならリストから消す
+            gameState.players = gameState.players.filter(p => p.peerId !== peerId); 
         }
         broadcastState();
     }
@@ -231,7 +224,7 @@ function handleDataFromGuest(data, conn) {
     if (data.type === 'JOIN') {
         if(!gameState.players.some(p => p.peerId === conn.peer)) {
             gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false });
-            pushLog(`👥 ${data.name} が参加しました。`);
+            pushLog(`[参加] ${data.name} が参加しました。`);
         }
         broadcastState();
     }
@@ -267,7 +260,7 @@ function hostStartGame() {
     });
     
     gameState.turnIndex = 0;
-    pushLog("💖 ゲームが開始されました！");
+    pushLog("[開始] ゲームが開始されました！");
     startTurn();
 }
 
@@ -306,23 +299,21 @@ function updateUI() {
     
     gameState.players.forEach((p, idx) => {
         const isCurrent = idx === gameState.turnIndex && gameState.started;
-        let statusText = p.alive ? "生存" : "❌ 脱落";
-        if (p.protected) statusText += " (🛡️)";
+        let statusText = p.alive ? "生存" : "脱落";
+        if (p.protected) statusText += " (ガード状態)";
         if (p.alive && p.peerId === myId) statusText += ` (手札:${p.hand.length}枚)`;
 
         const item = document.createElement("div");
         item.className = `player-item ${isCurrent ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
         
-        // プレイヤー名と状態のエリア
         const infoSpan = document.createElement("span");
         infoSpan.innerHTML = `<span>${p.name} ${p.peerId === myId ? '(あなた)' : ''}</span> <span style="margin-left:10px; font-size:0.85rem; color:#bdc3c7;">${statusText}</span>`;
         item.appendChild(infoSpan);
 
-        // 【キックボタンの追加】ホスト画面かつ自分以外の生存プレイヤーに設置
         if (isHost && p.peerId !== myId) {
             const kickBtn = document.createElement("button");
             kickBtn.className = "btn-danger";
-            kickBtn.innerText = "❌ キック";
+            kickBtn.innerText = "キック";
             kickBtn.onclick = () => kickPlayer(p.peerId, p.name);
             item.appendChild(kickBtn);
         }
@@ -429,46 +420,46 @@ function resolveAction(action) {
     const cardIdx = attacker.hand.indexOf(action.card);
     attacker.hand.splice(cardIdx, 1);
     
-    pushLog(`📢 ${attacker.name} が 【${CARD_DATA[action.card].name}】 をプレイ。`);
+    pushLog(`[プレイ] ${attacker.name} が 【${CARD_DATA[action.card].name}】 を使用。`);
 
     const target = gameState.players.find(p => p.peerId === action.targetId);
 
     if (action.card === 8) { 
-        pushLog(`💀 ${attacker.name} は姫を捨てたため脱落した！`);
+        pushLog(`[脱落] ${attacker.name} は姫を捨てたため脱落した！`);
         attacker.alive = false;
     }
     else if (action.card === 2) { 
         attacker.protected = true;
-        pushLog(`🛡️ ${attacker.name} は次の手番まで守られる。`);
+        pushLog(`[効果] ${attacker.name} は次の手番まで守られます。`);
     }
     else if (target && target.alive) {
         if (action.card === 1) { 
-            pushLog(`🎯 ${attacker.name} は ${target.name} の手札を [${action.guess}] と予想。`);
+            pushLog(`[予想] ${attacker.name} は ${target.name} の手札を [${action.guess}] と予想。`);
             if (target.hand[0] === action.guess) {
-                pushLog(`💥 的中！ ${target.name} が脱落。`);
+                pushLog(`[的中] 当たり！ ${target.name} が脱落。`);
                 target.alive = false;
             } else {
-                pushLog("❓ ハズレ！ 効果なし。");
+                pushLog("[結果] ハズレ！ 効果はありません。");
             }
         }
         else if (action.card === 3) { 
-            pushLog(`⚔️ ${attacker.name} と ${target.name} が騎士で対決！`);
+            pushLog(`[対決] ${attacker.name} と ${target.name} が騎士で対決！`);
             const p1 = attacker.hand[0];
             const p2 = target.hand[0];
             if (p1 > p2) {
-                pushLog(`🏆 ${attacker.name} の勝利！ ${target.name} が脱落。`);
+                pushLog(`[結果] ${attacker.name} の勝利！ ${target.name} が脱落。`);
                 target.alive = false;
             } else if (p1 < p2) {
-                pushLog(`🏆 ${target.name} の勝利！ ${attacker.name} が脱落。`);
+                pushLog(`[結果] ${target.name} の勝利！ ${attacker.name} が脱落。`);
                 attacker.alive = false;
             } else {
-                pushLog("🤝 引き分け！");
+                pushLog("[結果] 引き分け！");
             }
         }
         else if (action.card === 4) { 
-            pushLog(`🌀 ${target.name} は手札【${CARD_DATA[target.hand[0]].name}】を捨てさせられた。`);
+            pushLog(`[効果] ${target.name} は手札【${CARD_DATA[target.hand[0]].name}】を捨てさせられた。`);
             if (target.hand[0] === 8) {
-                pushLog(`💀 姫が捨てられた！ ${target.name} は脱落。`);
+                pushLog(`[脱落] 姫が捨てられた！ ${target.name} は脱落。`);
                 target.alive = false;
             } else {
                 target.hand = [];
@@ -476,13 +467,13 @@ function resolveAction(action) {
             }
         }
         else if (action.card === 5) { 
-            pushLog(`🔄 ${attacker.name} と ${target.name} の手札が交換された。`);
+            pushLog(`[効果] ${attacker.name} と ${target.name} の手札が交換されました。`);
             const temp = attacker.hand[0];
             attacker.hand[0] = target.hand[0];
             target.hand[0] = temp;
         }
     } else {
-        if (action.targetId) pushLog("❌ 対象が不適切、またはすでに守られていたため不発。");
+        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
     }
 
     broadcastState();
@@ -491,14 +482,14 @@ function resolveAction(action) {
 
 function endGame() {
     gameState.started = false;
-    pushLog("🏁 --- ゲーム終了 ---");
+    pushLog("--- ゲーム終了 ---");
     let winner = null;
     let maxCard = -1;
 
     gameState.players.forEach(p => {
         if (p.alive) {
             const card = p.hand[0] || 0;
-            pushLog(`📝 ${p.name} の手札は 【${CARD_DATA[card] ? CARD_DATA[card].name : card}】`);
+            pushLog(`[手札公開] ${p.name} の手札は 【${CARD_DATA[card] ? CARD_DATA[card].name : card}】`);
             if (card > maxCard) {
                 maxCard = card;
                 winner = p;
@@ -507,9 +498,9 @@ function endGame() {
     });
 
     if (winner) {
-        pushLog(`🎉 勝者は 【${winner.name}】 です！おめでとう！`);
+        pushLog(`[勝者] 勝者は 【${winner.name}】 です！おめでとう！`);
     } else {
-        pushLog("🤝 生存者がおらず、引き分けです。");
+        pushLog("[結果] 生存者がおらず、引き分けです。");
     }
     
     broadcastState();
