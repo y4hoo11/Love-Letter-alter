@@ -55,7 +55,7 @@
     <div class="input-group">
         <label>参加する部屋のID (数字8桁):</label>
         <input type="text" id="room-id-input" placeholder="ここに8桁の部屋IDを入力">
-        <button class="btn-secondary" style="margin-top: 10px;" onclick="joinRoom()">子（ゲスト）として参加する</button>
+        <button id="join-btn" class="btn-secondary" style="margin-top: 10px;" onclick="joinRoom()">子（ゲスト）として参加する</button>
     </div>
 </div>
 
@@ -96,7 +96,7 @@ let connToHost = null;
 let isHost = false;
 let myId = "";
 let myName = "";
-let currentHostId = ""; // 現在のホストIDを保持
+let currentHostId = ""; 
 
 let gameState = {
     started: false,
@@ -106,9 +106,10 @@ let gameState = {
     players: [], 
     turnIndex: 0,
     logs: [],
-    hostPeerId: "" // 同期用のホストID
+    hostPeerId: "" 
 };
 
+// 8桁のランダムな数字を生成 (10000000 ～ 99999999)
 const customRoomId = String(Math.floor(10000000 + Math.random() * 90000000));
 
 peer = new Peer(customRoomId, {
@@ -149,7 +150,6 @@ function beHost() {
     updateUI();
 }
 
-// ホスト側の接続受付用リスナー
 function setupHostConnectionListener() {
     peer.on('connection', (conn) => {
         if (gameState.started) {
@@ -162,16 +162,51 @@ function setupHostConnectionListener() {
     });
 }
 
+// 【最重要】参加処理（部屋が開いているかの判定ロジック）
 function joinRoom() {
     const hostId = document.getElementById('room-id-input').value.trim();
     if(!hostId) return alert("ホストの8桁の部屋IDを入力してください");
-    myName = document.getElementById('name-input').value;
-    currentHostId = hostId;
     
-    connectToHostId(hostId);
+    const joinBtn = document.getElementById('join-btn');
+    joinBtn.innerText = "接続確認中...";
+    joinBtn.disabled = true;
+
+    // 一時的に接続テストを行い、エラーが出たら部屋がないとみなす
+    let isConnectedSuccessfully = false;
+    const testConn = peer.connect(hostId);
+    
+    // タイムアウト監視（3秒経っても開かない場合は未開設判定）
+    const timeout = setTimeout(() => {
+        if (!isConnectedSuccessfully) {
+            testConn.close();
+            alert("[エラー] 指定された部屋はまだ開かれていないか、存在しません。\nホストが「部屋を作る」を押したことを確認してください。");
+            joinBtn.innerText = "子（ゲスト）として参加する";
+            joinBtn.disabled = false;
+        }
+    }, 3000);
+
+    testConn.on('open', () => {
+        isConnectedSuccessfully = true;
+        clearTimeout(timeout);
+        testConn.close(); // テスト用を閉じて正規接続へ
+        
+        // 正規接続を開始
+        myName = document.getElementById('name-input').value;
+        currentHostId = hostId;
+        connectToHostId(hostId);
+        
+        joinBtn.innerText = "子（ゲスト）として参加する";
+        joinBtn.disabled = false;
+    });
+
+    testConn.on('error', (err) => {
+        clearTimeout(timeout);
+        alert("[エラー] 指定された部屋に接続できません。部屋IDが正しいか確認してください。");
+        joinBtn.innerText = "子（ゲスト）として参加する";
+        joinBtn.disabled = false;
+    });
 }
 
-// 指定したホストに接続を試みる関数
 function connectToHostId(hostId) {
     if(connToHost) { connToHost.close(); }
     
@@ -187,8 +222,6 @@ function connectToHostId(hostId) {
         if (data.type === 'SYNC') {
             gameState = data.state;
             currentHostId = gameState.hostPeerId;
-            
-            // 【最重要】自分が新しいホストに任命されたかチェック
             if (gameState.hostPeerId === myId && !isHost) {
                 becomeNewHost();
             }
@@ -202,33 +235,24 @@ function connectToHostId(hostId) {
     });
 
     connToHost.on('close', () => {
-        // 現在のホストが落ちた場合、少し待って状態を確認（自動で新ホストが誰になるか決定されるのを受け止める）
         setTimeout(() => {
             if (!isHost && currentHostId === gameState.hostPeerId) {
-                // まだホスト移行処理がされていない場合、プレイヤーリストの先頭（生存者）を頼りに再接続
                 handleHostFailure();
             }
         }, 1500);
     });
 }
 
-// ゲストから新ホストへ昇格する処理
 function becomeNewHost() {
     isHost = true;
     connToHost = null;
     pushLog(`[システム] あなたが新しいホスト（部屋の主）になりました。`);
-    
-    // 他の生存プレイヤーとの接続を再確立する準備
     connections = [];
     setupHostConnectionListener();
-    
-    // 他のゲストが自分に接続し直してくるのを待って同期する
     broadcastState();
 }
 
-// ホストが切断された際の受け渡し判定ロジック
 function handleHostFailure() {
-    // 退出した古いホストを削除
     const oldHostId = gameState.hostPeerId;
     gameState.players = gameState.players.filter(p => p.peerId !== oldHostId);
     
@@ -238,16 +262,13 @@ function handleHostFailure() {
         return;
     }
     
-    // リストに残った最初のプレイヤーを「新ホスト」として全員で認識する
     const nextHost = gameState.players[0];
     gameState.hostPeerId = nextHost.peerId;
-    
     pushLog(`[ホスト交代] 元のホストが切断したため、${nextHost.name} が新しいホストになります。`);
     
     if (nextHost.peerId === myId) {
         becomeNewHost();
     } else {
-        // 新しいホストに向けて接続し直す
         connectToHostId(nextHost.peerId);
     }
 }
@@ -277,7 +298,6 @@ function kickPlayer(targetPeerId, targetName) {
         }
         gameState.players = gameState.players.filter(p => p.peerId !== targetPeerId);
         pushLog(`[退室] ${targetName} がホストによってキックされました。`);
-        
         if (gameState.started) {
             if (gameState.turnIndex >= gameState.players.length) {
                 gameState.turnIndex = 0;
@@ -288,7 +308,6 @@ function kickPlayer(targetPeerId, targetName) {
 }
 
 function handleDisconnect(peerId) {
-    // ホストがゲストの切断を検知した場合
     const player = gameState.players.find(p => p.peerId === peerId);
     if (player) {
         pushLog(`[切断] ${player.name} の接続が切れました。`);
@@ -297,8 +316,6 @@ function handleDisconnect(peerId) {
         } else {
             gameState.players = gameState.players.filter(p => p.peerId !== peerId); 
         }
-        
-        // コネクション配列からも削除
         connections = connections.filter(c => c.peer !== peerId);
         broadcastState();
     }
@@ -310,7 +327,6 @@ function handleDataFromGuest(data, conn) {
             gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], alive: true, protected: false, score: 0 });
             pushLog(`[参加] ${data.name} が参加しました。`);
         }
-        // 新ホスト移行直後のゲスト再接続の場合、既存のコネクション情報を上書き確保
         if (!connections.some(c => c.peer === conn.peer)) {
             connections.push(conn);
         }
@@ -408,7 +424,6 @@ function updateUI() {
 
     document.getElementById("deck-count").innerText = `山札: ${gameState.deck ? gameState.deck.length : 0}枚`;
 
-    // ロール表示の更新
     if (isHost) {
         document.getElementById('role-display').innerText = `部屋の主 (部屋ID: ${gameState.hostPeerId || myId})`;
     } else {
@@ -424,7 +439,6 @@ function updateUI() {
         if (p.protected) statusText += " (ガード状態)";
         if (p.alive && p.peerId === myId && gameState.started && !gameState.roundOver) statusText += ` (手札:${p.hand.length}枚)`;
 
-        // ホスト（部屋の主）の名前の横にクラウンマークを付与
         const hostMark = (p.peerId === gameState.hostPeerId) ? "👑" : "";
 
         const item = document.createElement("div");
@@ -447,7 +461,6 @@ function updateUI() {
         listEl.appendChild(item);
     });
 
-    // ホスト用のコントロールボタン
     if (isHost) {
         if (!gameState.started && !gameState.roundOver) {
             document.getElementById('start-game-btn').style.display = 'block';
@@ -627,7 +640,7 @@ function resolveAction(action) {
             target.hand[0] = temp;
         }
     } else {
-        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
+        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし. ");
     }
 
     const alivePlayers = gameState.players.filter(p => p.alive);
@@ -673,4 +686,5 @@ function endGame() {
 }
 </script>
 </body>
+
 </html>
