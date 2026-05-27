@@ -20,7 +20,7 @@ h1 {
 }
 #setup-container, #game-container {
     width: 100%;
-    max-width: 500px;
+    max-width: 600px;
     background: #34495e;
     padding: 20px;
     border-radius: 10px;
@@ -65,6 +65,17 @@ button:hover {
 .btn-danger:hover {
     background: #c0392b;
 }
+.btn-host-transfer {
+    background: #9b59b6;
+    width: auto;
+    padding: 3px 8px;
+    font-size: 0.8rem;
+    margin: 0;
+    margin-left: 5px;
+}
+.btn-host-transfer:hover {
+    background: #8e44ad;
+}
 .status-panel {
     background: #1a252f;
     padding: 10px;
@@ -74,26 +85,78 @@ button:hover {
     display: flex;
     justify-content: space-between;
 }
+
+/* プレイヤーボード構造（3人以上でも見やすく拡張） */
 .player-item {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px;
-    border-bottom: 1px solid #34495e;
+    flex-direction: column;
+    padding: 12px;
+    border-bottom: 1px solid #4f5d73;
     background: #2c3e50;
-    margin-bottom: 5px;
-    border-radius: 3px;
+    margin-bottom: 10px;
+    border-radius: 6px;
 }
 .player-item.active {
     border: 2px solid #2ecc71;
-    color: #2ecc71;
-    font-weight: bold;
+    box-shadow: 0 0 10px rgba(46, 204, 113, 0.5);
 }
 .player-item.eliminated {
-    color: #e74c3c;
-    text-decoration: line-through;
-    opacity: 0.6;
+    background: #232b35;
+    opacity: 0.5;
 }
+.player-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+/* 相手の手札裏面表示 */
+.enemy-hand-container {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 8px;
+}
+.card-back {
+    width: 30px;
+    height: 42px;
+    background: linear-gradient(135deg, #c0392b 25%, #e74c3c 100%);
+    border: 1px solid #fff;
+    border-radius: 3px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+
+/* プレイ履歴（出したカードを重ねて並べる） */
+.played-history {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    background: rgba(0, 0, 0, 0.15);
+    padding: 6px;
+    border-radius: 4px;
+    min-height: 32px;
+}
+.history-card {
+    width: 45px;
+    height: 60px;
+    background: #e74c3c;
+    border: 1px solid #fff;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 2px 4px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    box-shadow: 2px 2px 3px rgba(0,0,0,0.2);
+}
+.history-card .h-name {
+    font-size: 0.55rem;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
 .log-box {
     height: 120px;
     overflow-y: auto;
@@ -110,6 +173,7 @@ button:hover {
     gap: 15px;
     margin-top: 15px;
     min-height: 160px;
+    margin-bottom: 25px;
 }
 .card {
     width: 110px;
@@ -142,6 +206,48 @@ button:hover {
     padding: 3px;
     border-radius: 3px;
 }
+
+/* カードトラッカー（下部の一覧機能） */
+#card-tracker-container {
+    background: #1a252f;
+    padding: 12px;
+    border-radius: 6px;
+    margin-top: 15px;
+    border: 1px solid #4f5d73;
+}
+#card-tracker-container h3 {
+    margin: 0 0 10px 0;
+    font-size: 0.85rem;
+    color: #f1c40f;
+    text-align: center;
+}
+#card-tracker-list {
+    display: flex;
+    justify-content: space-between;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+.tracker-item {
+    flex: 1;
+    min-width: 65px;
+    background: #e74c3c;
+    border: 1px solid #fff;
+    padding: 4px;
+    border-radius: 4px;
+    text-align: center;
+    font-size: 0.7rem;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+.tracker-item.used-up {
+    background: #555 !important;
+    border-color: #777;
+    opacity: 0.35;
+    color: #888;
+}
+.tracker-num { font-size: 0.9rem; font-weight: bold; }
+.tracker-name { font-weight: bold; }
+.tracker-count { font-size: 0.65rem; background: rgba(0,0,0,0.3); margin-top: 2px; border-radius: 2px; }
+
 .modal {
     display: none;
     position: fixed;
