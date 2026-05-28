@@ -108,7 +108,7 @@ function renderPlayerList() {
             const btnGroup = document.createElement("div");
             
             if (p.disconnected) {
-                // 接続切れプレイヤーに対して「表示ごと完全に削除」するボタン（キック後もこれになります）
+                // 接続切れプレイヤーに対して「表示ごと完全に削除」するボタン
                 const removeBtn = document.createElement("button");
                 removeBtn.className = "btn-danger";
                 removeBtn.innerText = "完全に削除";
@@ -182,7 +182,7 @@ function renderPlayerList() {
                 const info = game.cardSettings[val] || { name: "?", desc: "" };
                 const badge = document.createElement("div");
                 badge.className = `history-card card-${val}`;
-                badge.title = `【${val}: ${info.name}】\n${info.desc}`; // カーソル合わせのみで表示
+                badge.title = `【${val}: ${info.name}】\n${info.desc}`;
                 badge.style.cursor = "help"; 
 
                 badge.innerHTML = `
@@ -231,7 +231,7 @@ function renderMyHand() {
         const info = game.cardSettings[val] || { name: "??", desc: "" };
         const card = document.createElement("div");
         card.className = `card card-${val}`;
-        card.title = info.desc; // カーソル合わせのみで表示
+        card.title = info.desc;
         
         const isInitialHand = index < game.drawSettings.firstTurnCount;
         const originText = isInitialHand ? "★初手" : "📥ドロー";
@@ -334,7 +334,7 @@ function executePlayCard(cardValue, target) {
     }
 }
 
-// トラッカーレンダリング（HTMLインラインテキストのバグを解消）
+// トラッカーレンダリング
 function renderTracker() {
     const listEl = document.getElementById("card-tracker-list");
     if (!listEl) return;
@@ -382,8 +382,6 @@ function renderTracker() {
             badge.style.fontSize = "1.2rem";
             badge.style.fontWeight = "bold";
             badge.style.cursor = "help";
-            
-            // 重なり不具合の原因だった子要素要素をすべて廃止し、ブラウザ標準のtitle属性に一本化
             badge.title = `【${i}: ${info.name}】\n${info.desc}`;
 
             if (isUsed) {
@@ -418,7 +416,6 @@ export function renderCustomSettingsUI() {
         gameContainer.insertBefore(div, logBox);
     }
 
-    // ホストでない場合は薄暗くして完全に操作不能（イベント遮断）にする
     if (!isHost) {
         div.style.opacity = "0.5";
         div.style.pointerEvents = "none";
@@ -432,7 +429,25 @@ export function renderCustomSettingsUI() {
 
     let html = `<h3>${titleText}</h3>`;
     html += `
-        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 12px; border: 1px solid #f1c40f;">
+        <h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>
+    `;
+
+    // 1番から8番（女王）までの入力欄を先にループ出力
+    for (let i = 1; i <= 8; i++) {
+        html += `
+            <div class="setting-item">
+                <span class="setting-card-info">${i}番 ${game.cardSettings[i].name}</span>
+                <div class="setting-input-wrapper">
+                    <label>枚数:</label>
+                    <input type="number" id="cfg-count-${i}" value="${game.cardSettings[i].count}" min="0" max="10" ${disabledAttr}>
+                </div>
+            </div>
+        `;
+    }
+
+    // ご指定の通り、8番 女王の枚数設定のすぐ下（カスタムブロックの最下部）に配布枚数設定を配置
+    html += `
+        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid #f1c40f;">
             <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>
             <div class="setting-item">
                 <span>最初の手札枚数:</span>
@@ -447,20 +462,8 @@ export function renderCustomSettingsUI() {
                 </div>
             </div>
         </div>
-        <h4 style="margin: 5px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>
     `;
-
-    for (let i = 1; i <= 8; i++) {
-        html += `
-            <div class="setting-item">
-                <span class="setting-card-info">${i}番 ${game.cardSettings[i].name}</span>
-                <div class="setting-input-wrapper">
-                    <label>枚数:</label>
-                    <input type="number" id="cfg-count-${i}" value="${game.cardSettings[i].count}" min="0" max="10" ${disabledAttr}>
-                </div>
-            </div>
-        `;
-    }
+    
     div.innerHTML = html;
 
     if (isHost) {
