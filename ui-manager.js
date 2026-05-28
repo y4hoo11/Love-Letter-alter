@@ -1,6 +1,6 @@
 // ui-manager.js
 import { game } from "./game-logic.js";
-import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority } from "./network-manager.js";
+import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority, hostRemoveDisconnectedPlayer } from "./network-manager.js";
 
 // ホスト用：ゲーム開始
 export function hostStartGame() {
@@ -63,7 +63,7 @@ export function updateUI() {
     renderPlayerList();
     renderMyHand();
     renderTracker();
-    renderCustomSettingsUI(); // ホスト・ゲスト状態に応じて統合カスタムUIを描画
+    renderCustomSettingsUI();
 }
 
 // プレイヤーリストのレンダリング
@@ -76,9 +76,9 @@ function renderPlayerList() {
         const item = document.createElement("div");
         item.className = "player-item";
         
-        // 接続切れ表示（課題7）
+        // 接続切れ表示（視覚的に薄暗くする）
         if (p.disconnected) {
-            item.classList.add("eliminated"); // 視覚的に薄暗くする
+            item.classList.add("eliminated");
         }
 
         if (game.isGameStarted) {
@@ -96,7 +96,6 @@ function renderPlayerList() {
         const nameSpan = document.createElement("span");
         nameSpan.style.fontWeight = "bold";
         
-        // 接続切れテキストの出し分け
         const statusText = p.disconnected ? " <span style='color:#e74c3c;'>[接続切れ]</span>" : "";
         const hostCrown = p.isHost ? "👑 " : "";
         const isProtected = game.isGameStarted && game.players.find(gp => gp.id === p.id)?.protected ? "🛡️" : "";
@@ -104,22 +103,33 @@ function renderPlayerList() {
         nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
         header.appendChild(nameSpan);
 
-        // ホスト用操作ボタン（自分以外かつ接続が切れていないプレイヤーが対象）
-        if (isHost && p.id !== window.myId && !p.disconnected) {
+        // ホスト用操作ボタンの制御
+        if (isHost && p.id !== window.myId) {
             const btnGroup = document.createElement("div");
             
-            const kickBtn = document.createElement("button");
-            kickBtn.className = "btn-danger";
-            kickBtn.innerText = "キック";
-            kickBtn.onclick = () => hostKickPlayer(p.id);
-            
-            const transBtn = document.createElement("button");
-            transBtn.className = "btn-host-transfer";
-            transBtn.innerText = "権限譲渡";
-            transBtn.onclick = () => hostTransferAuthority(p.id);
+            if (p.disconnected) {
+                // 接続切れプレイヤーに対して「表示ごと完全に削除」するボタン（キック後もこれになります）
+                const removeBtn = document.createElement("button");
+                removeBtn.className = "btn-danger";
+                removeBtn.innerText = "完全に削除";
+                removeBtn.style.background = "#95a5a6";
+                removeBtn.onclick = () => hostRemoveDisconnectedPlayer(p.id);
+                btnGroup.appendChild(removeBtn);
+            } else {
+                // 通常のアクティブプレイヤーに対する操作ボタン
+                const kickBtn = document.createElement("button");
+                kickBtn.className = "btn-danger";
+                kickBtn.innerText = "キック";
+                kickBtn.onclick = () => hostKickPlayer(p.id);
+                
+                const transBtn = document.createElement("button");
+                transBtn.className = "btn-host-transfer";
+                transBtn.innerText = "権限譲渡";
+                transBtn.onclick = () => hostTransferAuthority(p.id);
 
-            btnGroup.appendChild(transBtn);
-            btnGroup.appendChild(kickBtn);
+                btnGroup.appendChild(transBtn);
+                btnGroup.appendChild(kickBtn);
+            }
             header.appendChild(btnGroup);
         }
         header.style.display = "flex";
@@ -127,7 +137,7 @@ function renderPlayerList() {
         header.style.alignItems = "center";
         item.appendChild(header);
 
-        // 🃏 相手の手札描画
+        // 相手の手札描画
         if (game.isGameStarted && !p.spectator && p.id !== window.myId) {
             const pInGame = game.players.find(gp => gp.id === p.id);
             if (pInGame && pInGame.alive) {
@@ -172,7 +182,7 @@ function renderPlayerList() {
                 const info = game.cardSettings[val] || { name: "?", desc: "" };
                 const badge = document.createElement("div");
                 badge.className = `history-card card-${val}`;
-                badge.title = `【${val}: ${info.name}】\n${info.desc}`; // カーソル合わせで表示（課題1）
+                badge.title = `【${val}: ${info.name}】\n${info.desc}`; // カーソル合わせのみで表示
                 badge.style.cursor = "help"; 
 
                 badge.innerHTML = `
@@ -221,7 +231,7 @@ function renderMyHand() {
         const info = game.cardSettings[val] || { name: "??", desc: "" };
         const card = document.createElement("div");
         card.className = `card card-${val}`;
-        card.title = info.desc; // カーソル合わせで説明表示（課題1）
+        card.title = info.desc; // カーソル合わせのみで表示
         
         const isInitialHand = index < game.drawSettings.firstTurnCount;
         const originText = isInitialHand ? "★初手" : "📥ドロー";
@@ -324,7 +334,7 @@ function executePlayCard(cardValue, target) {
     }
 }
 
-// トラッカーレンダリング（課題1: 重なりバグ修正）
+// トラッカーレンダリング（HTMLインラインテキストのバグを解消）
 function renderTracker() {
     const listEl = document.getElementById("card-tracker-list");
     if (!listEl) return;
@@ -373,8 +383,7 @@ function renderTracker() {
             badge.style.fontWeight = "bold";
             badge.style.cursor = "help";
             
-            // バグの元だった innerHTML 子要素のテキストポップアップを廃止し、
-            // 信頼性の高い HTML 標準の `title` 属性でのツールチップ表示に統一（課題1解決）
+            // 重なり不具合の原因だった子要素要素をすべて廃止し、ブラウザ標準のtitle属性に一本化
             badge.title = `【${i}: ${info.name}】\n${info.desc}`;
 
             if (isUsed) {
@@ -390,12 +399,11 @@ function renderTracker() {
     }
 }
 
-// ⚙️ 統合されたルール・枚数カスタム設定UI（課題3, 4, 5解決）
+// ⚙️ 統合されたルール・枚数カスタム設定UI
 export function renderCustomSettingsUI() {
     const gameContainer = document.getElementById("game-container");
     if (!gameContainer) return;
 
-    // 古いホスト用/ゲスト用のUIコンテナを綺麗にリセット
     const oldHostUI = document.getElementById("host-custom-settings");
     const oldGuestUI = document.getElementById("guest-custom-settings");
     if (oldHostUI) oldHostUI.remove();
@@ -410,10 +418,10 @@ export function renderCustomSettingsUI() {
         gameContainer.insertBefore(div, logBox);
     }
 
-    // ホスト権限がない場合は薄暗くし、全入力を不可にする（課題4, 5）
+    // ホストでない場合は薄暗くして完全に操作不能（イベント遮断）にする
     if (!isHost) {
         div.style.opacity = "0.5";
-        div.style.pointerEvents = "none"; // マウス操作・フォーカスを遮断
+        div.style.pointerEvents = "none";
     } else {
         div.style.opacity = "1.0";
         div.style.pointerEvents = "auto";
@@ -455,7 +463,6 @@ export function renderCustomSettingsUI() {
     }
     div.innerHTML = html;
 
-    // ホストの時だけイベントリスナーを設定
     if (isHost) {
         document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
             game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);
@@ -479,7 +486,7 @@ export function renderCustomSettingsUI() {
     }
 }
 
-// 互換性維持のためのダミー関数
+// 旧互換維持用ダミー
 export function syncGuestSettingsUI(cardSettings, drawSettings) {}
 export function injectCustomSettingsUIIntoGame() {}
 
