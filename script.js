@@ -1,16 +1,12 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・カスタム同期機能搭載）
- * 修正点：
- * 1. カードトラッカーを残り枚数分の「●」マーク表示に変更（色はCSSクラス経由またはデフォルト色）
- * 2. 兵士の効果を相手の「特定位置の1枚」を対象にするよう変更
- * 3. プレイヤー情報欄に相手の手札が何枚目か（[1枚目][2枚目]...）を可視化
+ * 機能拡張：キック機能、ホスト譲渡機能、部屋離脱、リロード・切断時ペナルティ判定
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
 class LoveLetterCustomGame {
     constructor() {
-        // デフォルトのカード設定（アークライト公式準拠）
         this.cardSettings = {
             1: { name: "兵士", value: 1, count: 5, desc: "他プレイヤーの指定した1枚の手札を予測（兵士以外）。的中すれば脱落。" },
             2: { name: "僧侶", value: 2, count: 2, desc: "次の自分の手番まで、自分へのカード効果を無効化する。" },
@@ -46,8 +42,11 @@ class LoveLetterCustomGame {
     }
 
     initRound(playerList) {
-        if (playerList.length < 2) {
-            this.log("エラー: ゲームを開始するには2人以上のプレイヤーが必要です。");
+        // 観戦者(spectator)を除外した「生存可能プレイヤー」のみでゲームを構築
+        const activePlayers = playerList.filter(p => !p.spectator);
+
+        if (activePlayers.length < 2) {
+            this.log("エラー: ゲームを開始するには2人以上の有効なプレイヤーが必要です(観戦者除く)。");
             return false;
         }
 
@@ -58,7 +57,7 @@ class LoveLetterCustomGame {
             }
         }
 
-        const minRequired = (playerList.length * this.drawSettings.firstTurnCount) + this.drawSettings.everyTurnCount + (playerList.length < 4 ? 4 : 1);
+        const minRequired = (activePlayers.length * this.drawSettings.firstTurnCount) + this.drawSettings.everyTurnCount + (activePlayers.length < 4 ? 4 : 1);
         if (this.deck.length < minRequired) {
             this.log(`エラー: カードの総枚数(${this.deck.length}枚)が不足しています。枚数を増やしてください。`);
             return false;
@@ -72,7 +71,8 @@ class LoveLetterCustomGame {
                 id: p.id,
                 name: p.name,
                 hand: [],
-                alive: true,
+                alive: !p.spectator, // 観戦者は最初から死亡(脱落)扱い
+                spectator: !!p.spectator,
                 protected: false,
                 history: [],
                 score: existing ? existing.score : 0
@@ -81,13 +81,14 @@ class LoveLetterCustomGame {
 
         this.removedCard = this.deck.pop();
         this.faceUpCards = [];
-        if (this.players.length < 4) {
+        if (activePlayers.length < 4) {
             for (let i = 0; i < 3; i++) {
                 this.faceUpCards.push(this.deck.pop());
             }
         }
 
         for (let player of this.players) {
+            if (player.spectator) continue;
             for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
                 if (this.deck.length > 0) {
                     player.hand.push(this.deck.pop());
@@ -96,7 +97,10 @@ class LoveLetterCustomGame {
             this.checkChancellorBurst(player); 
         }
 
-        this.turnIndex = 0;
+        // 最初の生存プレイヤーのインデックスを探す
+        this.turnIndex = this.players.findIndex(p => p.alive && !p.spectator);
+        if (this.turnIndex === -1) this.turnIndex = 0;
+
         this.isGameStarted = true;
         this.log("📢 ゲームが開始されました！");
         return true;
@@ -104,19 +108,17 @@ class LoveLetterCustomGame {
 
     startTurn() {
         let currentPlayer = this.players[this.turnIndex];
-        if (!currentPlayer.alive) {
+        if (!currentPlayer || !currentPlayer.alive || currentPlayer.spectator) {
             this.nextTurn();
             return;
         }
 
         currentPlayer.protected = false; 
-
         const drawCount = this.drawSettings.everyTurnCount;
 
         if (this.deck.length >= drawCount) {
             for (let i = 0; i < drawCount; i++) {
-                const drawnCard = this.deck.pop();
-                currentPlayer.hand.push(drawnCard);
+                currentPlayer.hand.push(this.deck.pop());
             }
             this.log(`👉 ${currentPlayer.name} の手番（${drawCount}枚ドロー / 山札残: ${this.deck.length}枚）`);
 
@@ -134,7 +136,6 @@ class LoveLetterCustomGame {
         }
     }
 
-    // カードのプレイ処理 (targetの中に handIndex が追加されました)
     playCard(playerId, cardValue, target = {}) {
         let player = this.players.find(p => p.id === playerId);
         if (!player || !player.alive) return;
@@ -153,19 +154,16 @@ class LoveLetterCustomGame {
             return;
         }
 
-        // 対象の手札位置を特定 (デフォルトは0枚目)
         const targetHandIdx = (target.handIndex !== undefined) ? target.handIndex : 0;
 
         switch(cardValue) {
             case 1: // 兵士
-                // 🔄 相手の「指定された位置(1枚目、2枚目など)」のカードのみを判定対象にする
                 const targetCard = targetPlayer.hand[targetHandIdx];
-                this.log(`🏹 ${player.name} は ${targetPlayer.name} の 【${targetHandIdx + 1}枚目のカード】 を狙い、狙撃予測を【${this.cardSettings[target.guessCardValue].name}】と宣言。`);
+                this.log(`🏹 ${player.name} は ${targetPlayer.name} の 【${targetHandIdx + 1}枚目のカード】 を狙い、予測を【${this.cardSettings[target.guessCardValue].name}】と宣言。`);
                 
                 if (targetCard === target.guessCardValue) {
                     this.log(`🎯 的中！ ${targetPlayer.name} の${targetHandIdx + 1}枚目の手札は【${this.cardSettings[target.guessCardValue].name}】でした。`);
                     targetPlayer.alive = false;
-                    // 全手札を捨て札へ
                     while(targetPlayer.hand.length > 0) {
                         this.handleDiscardEffects(targetPlayer, targetPlayer.hand.pop());
                     }
@@ -180,7 +178,6 @@ class LoveLetterCustomGame {
                 break;
 
             case 3: // 騎士
-                // 騎士の勝負も、複数枚手札がある場合は「指定位置のカード」同士で比較（デフォルトは最初の1枚）
                 const myCompareCard = player.hand[0] || cardValue; 
                 const enemyCompareCard = targetPlayer.hand[targetHandIdx] || targetPlayer.hand[0];
                 
@@ -240,7 +237,7 @@ class LoveLetterCustomGame {
     }
 
     checkChancellorBurst(player) {
-        if (!player.alive || player.hand.length < 2) return false;
+        if (!player.alive || player.hand.length < 2 || player.spectator) return false;
         const totalSum = player.hand.reduce((a, b) => a + b, 0);
         if (totalSum >= 12 && player.hand.includes(6)) {
             player.alive = false;
@@ -257,11 +254,17 @@ class LoveLetterCustomGame {
     }
 
     nextTurn() {
-        if (this.getAlivePlayers().length <= 1 || this.deck.length === 0) {
+        const alivePlayers = this.getAlivePlayers();
+        if (alivePlayers.length <= 1 || this.deck.length === 0) {
             this.endRound();
             return;
         }
-        this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        
+        // 次の生存プレイヤーまでインデックスを進める
+        do {
+            this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        } while ((!this.players[this.turnIndex].alive || this.players[this.turnIndex].spectator) && alivePlayers.length > 0);
+
         this.startTurn();
     }
 
@@ -281,7 +284,7 @@ class LoveLetterCustomGame {
         if (alivePlayers.length === 1) {
             alivePlayers[0].score += 1;
             this.log(`🏆 勝者: ${alivePlayers[0].name} (生き残り勝利)`);
-        } else {
+        } else if (alivePlayers.length > 1) {
             this.log("⚖️ 生存者の手札比較を行います。");
             alivePlayers.forEach(p => this.log(`・${p.name}: 強さ ${p.hand[0]} (${this.cardSettings[p.hand[0]].name})`));
 
@@ -310,10 +313,17 @@ class LoveLetterCustomGame {
                 }
             }
         }
+        
+        // 切断されて残った「観戦者」のフラグをルーム同期用リストにも反映
+        this.players.forEach(p => {
+            let rawP = rawPlayerList.find(rp => rp.id === p.id);
+            if (rawP && p.spectator) rawP.spectator = true;
+        });
+
         updateUI(); 
     }
 
-    getAlivePlayers() { return this.players.filter(p => p.alive); }
+    getAlivePlayers() { return this.players.filter(p => p.alive && !p.spectator); }
     shuffle(a) { for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} }
     
     log(msg) {
@@ -331,7 +341,7 @@ function renderLogBox(logsArray) {
 }
 
 // --- 🌐 P2P通信・ネットワーク管理ロジック ---
-const game = new LoveLetterCustomGame();
+let game = new LoveLetterCustomGame();
 let peer = null;
 let myId = "";
 let connections = []; 
@@ -372,7 +382,10 @@ window.addEventListener('load', () => {
             conn.close();
             return;
         }
+        
+        // メタデータ、またはオープン時にIDを登録するためコネクションを監視
         connections.push(conn);
+        
         conn.on('data', (rawMsg) => {
             try {
                 const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
@@ -381,13 +394,24 @@ window.addEventListener('load', () => {
                 console.error("データ解析失敗:", e);
             }
         });
-    });
 
-    const oldResetBtn = document.getElementById("reset-game-btn");
-    if(oldResetBtn) oldResetBtn.remove();
+        // ゲストが予期せずタブを閉じる、または通信切断された場合
+        conn.on('close', () => {
+            handlePlayerDisconnect(conn.peer);
+        });
+    });
 
     injectAbortButton();
     updateTrackerUI();
+});
+
+// リロード・画面を閉じる際のアクションフック
+window.addEventListener('beforeunload', () => {
+    if (isHost) {
+        connections.forEach(c => safeSend(c, { type: "HOST_DISCONNECT" }));
+    } else if (connToHost) {
+        safeSend(connToHost, { type: "LEAVE", id: myId });
+    }
 });
 
 document.getElementById("my-peer-id").addEventListener('click', () => {
@@ -398,7 +422,7 @@ document.getElementById("my-peer-id").addEventListener('click', () => {
 function beHost() {
     myPlayerName = document.getElementById("name-input").value.trim() || "ホスト";
     isHost = true; 
-    rawPlayerList = [{ id: myId, name: myPlayerName }];
+    rawPlayerList = [{ id: myId, name: myPlayerName, spectator: false }];
     
     document.getElementById("setup-container").style.display = "none";
     document.getElementById("game-container").style.display = "block";
@@ -420,17 +444,14 @@ function joinRoom() {
 
     game.log(`🌐 部屋 ${targetRoomId} に接続を試みています…`);
     
-    connToHost = peer.connect(targetRoomId, {
-        serialization: "none"
-    });
+    connToHost = peer.connect(targetRoomId, { serialization: "none" });
 
     connToHost.on('open', () => {
         isHost = false; 
         document.getElementById("setup-container").style.display = "none";
         document.getElementById("game-container").style.display = "block";
         
-        game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！ゲーム開始を待っています。`);
-        
+        game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！`);
         safeSend(connToHost, { type: "JOIN", name: myPlayerName, id: myId });
     });
 
@@ -444,25 +465,81 @@ function joinRoom() {
     });
 
     connToHost.on('close', () => {
-        alert("ホストとの接続が切れました。");
+        alert("ホストとの接続が切れたか、キックされました。");
         location.reload();
     });
+}
+
+// 🔌 【切断・更新処理コア】プレイヤーが切断・リロードしたときのホスト側ロジック
+function handlePlayerDisconnect(peerId) {
+    const playerIndex = rawPlayerList.findIndex(p => p.id === peerId);
+    if (playerIndex === -1) return;
+
+    const pName = rawPlayerList[playerIndex].name;
+
+    if (!game.isGameStarted) {
+        // ゲーム開始前なら「観戦者」フラグを立てる（あるいはリストから完全削除でも可、仕様通り観戦扱いに）
+        rawPlayerList[playerIndex].spectator = true;
+        game.log(`⚠️ ${pName} の接続が切れました。ゲーム開始前のため観戦者扱いになります。`);
+        
+        // 通信配列からも整理
+        connections = connections.filter(c => c.peer !== peerId);
+        broadcastState();
+        updatePlayerListUI();
+        updateUI();
+    } else {
+        // ゲーム開始後なら「敗北(即時脱落)扱い」
+        const inGamePlayer = game.players.find(p => p.id === peerId);
+        if (inGamePlayer && inGamePlayer.alive && !inGamePlayer.spectator) {
+            inGamePlayer.alive = false;
+            inGamePlayer.spectator = true; // 今後復帰しても観戦
+            while(inGamePlayer.hand.length > 0) {
+                game.handleDiscardEffects(inGamePlayer, inGamePlayer.hand.pop());
+            }
+            game.log(`💥 プレイ中の ${pName} の接続が切れたため、ペナルティで敗北（脱落）扱いとなりました。`);
+            
+            // 該当プレイヤーの手番だった場合、または終了判定を回す
+            if (game.players[game.turnIndex].id === peerId) {
+                game.checkRoundEndConditions();
+            } else {
+                game.checkRoundEndConditions();
+            }
+        }
+        
+        // ルームリスト側も同期
+        rawPlayerList[playerIndex].spectator = true;
+        connections = connections.filter(c => c.peer !== peerId);
+        broadcastState();
+        updateUI();
+    }
 }
 
 function handleReceivedData(data, conn) {
     if (isHost) {
         if (data.type === "JOIN") {
-            if (!rawPlayerList.some(p => p.id === data.id)) {
-                rawPlayerList.push({ id: data.id, name: data.name });
+            let existing = rawPlayerList.find(p => p.id === data.id);
+            if (!existing) {
+                rawPlayerList.push({ id: data.id, name: data.name, spectator: false });
                 game.log(`👥 ${data.name} が参加しました。`);
-                broadcastState();
-                updatePlayerListUI();
+            } else {
+                // リロードなどによる再接続の際、開始前なら観戦解除
+                if (!game.isGameStarted) existing.spectator = false;
+                game.log(`👥 ${data.name} が再接続しました。`);
             }
+            broadcastState();
+            updatePlayerListUI();
+            updateUI();
         }
         if (data.type === "ACTION") {
             game.playCard(data.playerId, data.cardValue, data.target);
             broadcastState();
             updateUI();
+        }
+        if (data.type === "LEAVE") {
+            game.log(`🚪 ${data.name || "プレイヤー"} が自主的に部屋を離脱しました。`);
+            handlePlayerDisconnect(data.id);
+            // コネクションの切断を明示化
+            if(conn) conn.close();
         }
     } else {
         if (data.type === "SYNC") {
@@ -470,11 +547,34 @@ function handleReceivedData(data, conn) {
                 game.logData = data.logData;
                 renderLogBox(game.logData);
             }
-            
             Object.assign(game, data.gameState);
             rawPlayerList = data.rawPlayerList;
             
             syncGuestSettingsUI(data.gameState.cardSettings, data.gameState.drawSettings);
+            updateUI();
+        }
+        if (data.type === "KICKED") {
+            alert("部屋のホストによってキックされました。");
+            location.reload();
+        }
+        if (data.type === "HOST_DISCONNECT") {
+            alert("ホストの接続が切れたため、部屋が解散されました。");
+            location.reload();
+        }
+        if (data.type === "BE_HOST") {
+            alert("👑 あなたにホスト権限が譲渡されました！");
+            isHost = true;
+            connToHost = null;
+            
+            // UIのリビルド
+            document.getElementById("start-game-btn").style.display = game.isGameStarted ? "none" : "block";
+            const oldArea = document.getElementById("host-card-settings-area");
+            if(oldArea) oldArea.remove();
+            injectCustomSettingsUIIntoGame();
+            
+            // ピア接続をホスト用に再構築するため、他メンバーと繋ぎ直す処理などは
+            // 本格的なP2Pメッシュが必要ですが、今回は簡易メッセージの切り替えを最優先します。
+            broadcastState();
             updateUI();
         }
     }
@@ -501,6 +601,75 @@ function broadcastState() {
     connections.forEach(c => {
         safeSend(c, syncData);
     });
+}
+
+// ⚙️ 【新設】ホストによるキック機能実行
+function hostKickPlayer(peerId) {
+    if (!isHost) return;
+    const target = rawPlayerList.find(p => p.id === peerId);
+    if (!target) return;
+
+    if (confirm(`本当に ${target.name} をキックしますか？`)) {
+        game.log(`🔨 ホストが ${target.name} をキックしました。`);
+        
+        const conn = connections.find(c => c.peer === peerId);
+        if (conn) {
+            safeSend(conn, { type: "KICKED" });
+            setTimeout(() => conn.close(), 200);
+        }
+        handlePlayerDisconnect(peerId);
+        rawPlayerList = rawPlayerList.filter(p => p.id peerId);
+        broadcastState();
+        updatePlayerListUI();
+        updateUI();
+    }
+}
+
+// 👑 【新設】ホスト権限の譲渡機能実行
+function hostTransferAuthority(peerId) {
+    if (!isHost) return;
+    const target = rawPlayerList.find(p => p.id === peerId);
+    if (!target) return;
+
+    if (confirm(`本当に ${target.name} にホスト権限を譲渡しますか？`)) {
+        const conn = connections.find(c => c.peer === peerId);
+        if (conn) {
+            game.log(`👑 ホスト権限が ${myPlayerName} から ${target.name} へ譲渡されました。`);
+            safeSend(conn, { type: "BE_HOST" });
+            
+            // 自身をゲスト化
+            isHost = false;
+            connToHost = conn; // 新しいホストへのコネクションとする
+            connections = [];
+            
+            document.getElementById("start-game-btn").style.display = "none";
+            document.getElementById("next-round-btn").style.display = "none";
+            const abortBtn = document.getElementById("abort-game-btn");
+            if(abortBtn) abortBtn.style.display = "none";
+
+            const settingsArea = document.getElementById("host-card-settings-area");
+            if(settingsArea) settingsArea.className = "custom-card-settings guest-view-only";
+
+            updateUI();
+        }
+    }
+}
+
+// 🚪 【新設】自主的に部屋を離脱するボタンの処理
+function leaveRoom() {
+    if (confirm("本当にこの部屋から離脱しますか？")) {
+        if (isHost) {
+            if (confirm("あなたがホストです。離脱すると部屋全員が解散されます。よろしいですか？")) {
+                connections.forEach(c => safeSend(c, { type: "HOST_DISCONNECT" }));
+                setTimeout(() => location.reload(), 200);
+            }
+        } else {
+            if (connToHost) {
+                safeSend(connToHost, { type: "LEAVE", id: myId, name: myPlayerName });
+                setTimeout(() => location.reload(), 200);
+            }
+        }
+    }
 }
 
 // --- 🎮 ゲーム制御ボタン用関数 ---
@@ -545,7 +714,7 @@ function hostAbortGame() {
 
     game.isGameStarted = false;
     game.deck = [];
-    game.players.forEach(p => { p.hand = []; p.alive = true; p.history = []; p.protected = false; });
+    game.players.forEach(p => { p.hand = []; p.alive = !p.spectator; p.history = []; p.protected = false; });
     game.log("⚠️ ホストによって現在のゲームが強制終了されました(勝敗なし)。");
     
     broadcastState();
@@ -553,7 +722,6 @@ function hostAbortGame() {
 }
 
 // --- 🖥️ UI描画・DOM操作ロジック ---
-
 function injectCustomSettingsUIIntoGame() {
     const gameContainer = document.getElementById("game-container");
     const targetNode = document.getElementById("log-box");
@@ -565,7 +733,6 @@ function injectCustomSettingsUIIntoGame() {
     wrapper.id = "host-card-settings-area";
     
     let htmlContent = `<h3>🃏 カスタムゲーム設定（ホスト専用）</h3>`;
-    
     for (const [val, config] of Object.entries(game.cardSettings)) {
         htmlContent += `
             <div class="setting-item">
@@ -580,7 +747,7 @@ function injectCustomSettingsUIIntoGame() {
     htmlContent += `
         <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
         <div class="setting-item">
-            <span class="setting-card-info">初手（ゲーム開始時）の手札枚数</span>
+            <span class="setting-card-info">初手の手札枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-first" value="${game.drawSettings.firstTurnCount}" min="1" max="5" onchange="onHostChangeDraw('first', this.value)"> 枚
             </div>
@@ -625,7 +792,6 @@ function syncGuestSettingsUI(hostCardSettings, hostDrawSettings) {
     wrapper.className = "custom-card-settings guest-view-only";
     
     let htmlContent = `<h3>🃏 カスタムゲーム設定状況（ホストが設定中…）</h3>`;
-
     for (let i = 1; i <= 8; i++) {
         htmlContent += `
             <div class="setting-item">
@@ -640,7 +806,7 @@ function syncGuestSettingsUI(hostCardSettings, hostDrawSettings) {
     htmlContent += `
         <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
         <div class="setting-item">
-            <span class="setting-card-info">初手（ゲーム開始時）の手札枚数</span>
+            <span class="setting-card-info">初手の手札枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-first" value="${hostDrawSettings.firstTurnCount}" disabled> 枚
             </div>
@@ -679,7 +845,20 @@ function updatePlayerListUI() {
     if (!game.isGameStarted) {
         listArea.innerHTML = "<h4>現在の参加メンバー:</h4>";
         rawPlayerList.forEach(p => {
-            listArea.innerHTML += `<div style="padding: 4px 0;">・${p.name} ${p.id === myId ? " (あなた)" : ""}</div>`;
+            let ctrlButtons = "";
+            // ホスト視点かつ自分以外のメンバーにキック・譲渡ボタンを追加
+            if (isHost && p.id !== myId) {
+                ctrlButtons = `
+                    <button class="btn-danger" style="display:inline-block; width:auto; padding:2px 6px; font-size:0.7rem;" onclick="hostKickPlayer('${p.id}')">キック</button>
+                    <button class="btn-host-transfer" style="display:inline-block; width:auto; padding:2px 6px; font-size:0.7rem;" onclick="hostTransferAuthority('${p.id}')">権限譲渡</button>
+                `;
+            }
+            const specLabel = p.spectator ? " <span style='color:#e74c3c;'>(観戦中)</span>" : "";
+            listArea.innerHTML += `
+                <div style="padding: 6px 0; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <div>・${p.name} ${p.id === myId ? " (あなた)" : ""}${specLabel}</div>
+                    <div>${ctrlButtons}</div>
+                </div>`;
         });
     }
 }
@@ -691,7 +870,11 @@ function updateUI() {
     
     const roleDisplay = document.getElementById("role-display");
     if (me) {
-        roleDisplay.innerText = me.alive ? (me.protected ? "🛡️ 僧侶ガード中" : "🟢 生存") : "💀 脱落";
+        if (me.spectator) {
+            roleDisplay.innerText = "👁️ 観戦中";
+        } else {
+            roleDisplay.innerText = me.alive ? (me.protected ? "🛡️ 僧侶ガード中" : "🟢 生存") : "💀 脱落";
+        }
     }
 
     const abortBtn = document.getElementById("abort-game-btn");
@@ -729,13 +912,13 @@ function updateUI() {
             const pItem = document.createElement("div");
             pItem.className = `player-item ${isCurrentTurn ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
             
-            // 🔄 相手の手札枚数に合わせた「1枚目」「2枚目」などの位置可視化
             let handBacks = "";
-            if (p.alive) {
+            if (p.alive && !p.spectator) {
                 for(let i=0; i<p.hand.length; i++) {
-                    // 何枚目か視認しやすいバッジスタイル
                     handBacks += `<span class="card-back-index-badge" style="display:inline-block; margin:2px; padding:4px 8px; background:#34495e; color:#fff; border-radius:4px; font-size:0.75rem;">[${i+1}枚目]</span>`;
                 }
+            } else if (p.spectator) {
+                handBacks = "<span style='font-size:0.75rem;color:#e74c3c;'>👁️ 観戦モード</span>";
             }
 
             let historyHTML = "";
@@ -743,20 +926,30 @@ function updateUI() {
                 historyHTML += `
                     <div class="history-card history-card-${hVal}">
                         <div>${hVal}</div>
-                        <div class="h-name">${game.cardSettings[hVal].name}</div>
+                        <div class="h-name">${game.cardSettings[hVal] ? game.cardSettings[hVal].name : "不明"}</div>
                     </div>
                 `;
             });
 
+            let ctrlButtons = "";
+            if (isHost && p.id !== myId) {
+                ctrlButtons = `
+                    <div style="margin-top:5px;">
+                        <button class="btn-danger" style="padding:2px 6px; font-size:0.65rem;" onclick="hostKickPlayer('${p.id}')">キック</button>
+                    </div>
+                `;
+            }
+
             pItem.innerHTML = `
                 <div class="player-header">
-                    <strong>${p.name} ${p.id === myId ? "(あなた)" : ""}</strong>
+                    <strong>${p.name} ${p.id === myId ? "(あなた)" : ""} ${p.spectator ? "(観戦)" : ""}</strong>
                     <span class="score-badge">🏆 ${p.score}勝</span>
                 </div>
                 <div class="enemy-hand-container" style="margin: 5px 0;">
-                    <span style="font-size:0.8rem; color:#bdc3c7;">手札構成: </span>${handBacks || "<span style='font-size:0.75rem;color:#e74c3c;'>手札なし</span>"}
+                    <span style="font-size:0.8rem; color:#bdc3c7;">手札状態: </span>${handBacks || "<span style='font-size:0.75rem;color:#e74c3c;'>手札なし</span>"}
                 </div>
                 <div class="played-history">${historyHTML || "<span style='font-size:0.75rem;color:#7f8c8d;'>捨て札なし</span>"}</div>
+                ${ctrlButtons}
             `;
             pList.appendChild(pItem);
         });
@@ -768,9 +961,9 @@ function updateUI() {
     const handTitle = document.getElementById("hand-title");
     cardArea.innerHTML = "";
     
-    if (me && me.alive && game.isGameStarted) {
+    if (me && me.alive && game.isGameStarted && !me.spectator) {
         handTitle.style.display = "block";
-        const isMyTurn = game.players[game.turnIndex].id === myId;
+        const isMyTurn = game.players[game.turnIndex] && game.players[game.turnIndex].id === myId;
         
         me.hand.forEach((cVal, idx) => {
             const cardNode = document.createElement("div");
@@ -796,7 +989,6 @@ function updateUI() {
     updateTrackerUI();
 }
 
-// 🔄【修正】トラッカーを各カードのクラス色のまま「●」の数でぱっと見れる形に変更
 function updateTrackerUI() {
     const trackerList = document.getElementById("card-tracker-list");
     if (!trackerList) return;
@@ -804,14 +996,13 @@ function updateTrackerUI() {
 
     const usedCounts = { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0 };
     game.players.forEach(p => {
-        p.history.forEach(c => { usedCounts[c]++; });
+        p.history.forEach(c => { if(usedCounts[c] !== undefined) usedCounts[c]++; });
     });
 
     for (let i = 1; i <= 8; i++) {
         const total = game.cardSettings[i].count;
         const remaining = Math.max(0, total - usedCounts[i]);
         
-        // 残り枚数を「●」、消費された枚数を「〇」のマークで生成
         let circlesHTML = "";
         for (let r = 0; r < remaining; r++) {
             circlesHTML += `<span class="circle-active" style="margin-right:2px; font-size:1.1rem; line-height:1;">●</span>`;
@@ -821,7 +1012,6 @@ function updateTrackerUI() {
         }
 
         const item = document.createElement("div");
-        // card-1 ~ card-8 などの色指定クラスをそのまま利用できるように適用
         item.className = `tracker-item card-${i} tracker-${i} ${remaining === 0 ? 'used-up' : ''}`;
         item.style.display = "flex";
         item.style.alignItems = "center";
@@ -843,7 +1033,7 @@ function updateTrackerUI() {
     }
 }
 
-// --- 🎯 モーダル・ターゲット選択ロジック (何枚目かを指定させる分岐を追加) ---
+// --- 🎯 モーダル・ターゲット選択ロジック ---
 let currentSelectedCard = null;
 let currentTargetPlayerId = null;
 
@@ -863,7 +1053,7 @@ function selectActionTarget(cardValue) {
     
     game.players.forEach(p => {
         if (cardValue !== 4 && p.id === myId) return;
-        if (!p.alive) return;
+        if (!p.alive || p.spectator) return;
 
         const btn = document.createElement("button");
         btn.innerText = p.name + (p.protected ? " (ガード中)" : "");
@@ -871,11 +1061,9 @@ function selectActionTarget(cardValue) {
         btn.style.width = "100%";
         btn.onclick = () => {
             currentTargetPlayerId = p.id;
-            // 🔄 兵士(1)または魔術師(4)か騎士(3)で相手の手札が複数ある場合、何枚目を対象にするか選択させる
             if ([1, 3, 4].includes(cardValue) && p.hand.length > 1) {
                 selectTargetHandIndex(p);
             } else {
-                // 手札が1枚だけなら自動的に0番目（1枚目）を対象にする
                 if (cardValue === 1) {
                     selectGuessCard(p.id, 0);
                 } else {
@@ -895,7 +1083,6 @@ function selectActionTarget(cardValue) {
     tButtons.appendChild(cancelBtn);
 }
 
-// 🔄【追加】相手の何枚目のカードを効果対象にするか選ぶUI
 function selectTargetHandIndex(targetPlayer) {
     const tButtons = document.getElementById("target-buttons");
     tButtons.innerHTML = `<h4>${targetPlayer.name} の何枚目のカードを対象にしますか？</h4>`;
@@ -907,7 +1094,6 @@ function selectTargetHandIndex(targetPlayer) {
         btn.style.width = "100%";
         btn.onclick = () => {
             if (currentSelectedCard === 1) {
-                // 兵士の場合は続いて予測カード選択へ
                 selectGuessCard(targetPlayer.id, i);
             } else {
                 executeCardPlay(myId, currentSelectedCard, { targetPlayerId: targetPlayer.id, handIndex: i });
@@ -918,7 +1104,6 @@ function selectTargetHandIndex(targetPlayer) {
     }
 }
 
-// 🔄 予測カード選択（引数に handIndex を引き継ぐよう拡張）
 function selectGuessCard(targetPlayerId, handIndex) {
     const tButtons = document.getElementById("target-buttons");
     tButtons.innerHTML = `<h4>${handIndex + 1}枚目のカードに対する予測を宣言:</h4>`;
