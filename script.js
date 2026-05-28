@@ -1,6 +1,6 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
- * オンライン P2P対応（人数無制限・ホスト作成後のカードカスタマイズ機能搭載）
+ * オンライン P2P対応（人数無制限・ホスト作成後のカードカスタマイズ同期機能搭載）
  * 全文表示・エラーレス結合版
  */
 
@@ -277,7 +277,7 @@ class LoveLetterCustomGame {
                 }
             }
         }
-        updateUI(); // 終了状態のUI反映
+        updateUI(); 
     }
 
     getAlivePlayers() { return this.players.filter(p => p.alive); }
@@ -294,16 +294,14 @@ let peer = null;
 let myId = "";
 let connections = []; // ホスト用：全接続クライアント
 let connToHost = null; // ゲスト用：ホストへの接続
-let isHost = false;
+let isHost = false; 
 let myPlayerName = "プレイヤー";
-let rawPlayerList = []; // ホストが束ねる全参加者データ [{id, name}]
+let rawPlayerList = []; // 全参加者データ [{id, name}]
 
-// ランダムな8桁の数字IDを生成するヘルパー
 function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
-// ページ読み込み時に自動でPeerを初期化
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
     peer = new Peer(myId, { debug: 1 });
@@ -317,7 +315,6 @@ window.addEventListener('load', () => {
         document.getElementById("my-peer-id").innerText = "部屋ID生成失敗。再読み込みしてください。";
     });
 
-    // ホストとして接続を待ち受ける設定
     peer.on('connection', (conn) => {
         if (!isHost) {
             conn.close();
@@ -328,6 +325,13 @@ window.addEventListener('load', () => {
             handleReceivedData(data, conn);
         });
     });
+
+    // 既存の「リセットボタン」のHTML記述を安全に抹消（エラー防止）
+    const oldResetBtn = document.getElementById("reset-game-btn");
+    if(oldResetBtn) oldResetBtn.remove();
+
+    // トラッカーの下に「ゲームを強制終了」するボタンを動的生成
+    injectAbortButton();
 
     updateTrackerUI();
 });
@@ -341,16 +345,14 @@ document.getElementById("my-peer-id").addEventListener('click', () => {
 // HTML内の「親として部屋を作る」に対応
 function beHost() {
     myPlayerName = document.getElementById("name-input").value.trim() || "ホスト";
-    isHost = true;
+    isHost = true; // 明示的に自身を絶対的ホストに指定
     rawPlayerList = [{ id: myId, name: myPlayerName }];
     
     document.getElementById("setup-container").style.display = "none";
     document.getElementById("game-container").style.display = "block";
     document.getElementById("start-game-btn").style.display = "block";
     
-    // 【修正点】部屋を作成した直後に、ゲーム画面内（ログの上辺り）にカスタム設定UIを動的に挿入する
     injectCustomSettingsUIIntoGame();
-
     game.log(`🏠 部屋を作成しました（ID: ${myId}）。参加者を待っています…`);
     updatePlayerListUI();
 }
@@ -369,11 +371,10 @@ function joinRoom() {
     connToHost = peer.connect(targetRoomId);
 
     connToHost.on('open', () => {
-        isHost = false;
+        isHost = false; // クライアント（子）であることを絶対固定
         document.getElementById("setup-container").style.display = "none";
         document.getElementById("game-container").style.display = "block";
         
-        // ホストに参加表明を送信
         connToHost.send({ type: "JOIN", name: myPlayerName, id: myId });
     });
 
@@ -390,7 +391,7 @@ function joinRoom() {
 // データの受送信ハンドラ
 function handleReceivedData(data, conn) {
     if (isHost) {
-        // --- ホストが受信する処理 ---
+        // --- 👑 ホストが受信する処理 ---
         if (data.type === "JOIN") {
             if (!rawPlayerList.some(p => p.id === data.id)) {
                 rawPlayerList.push({ id: data.id, name: data.name });
@@ -404,11 +405,19 @@ function handleReceivedData(data, conn) {
             broadcastState();
             updateUI();
         }
+        if (data.type === "UPDATE_COUNT") {
+            // 譲渡バグ対策：万が一ゲストから枚数変更が届いてもホスト側は一切無視
+            return;
+        }
     } else {
-        // --- ゲストが受信する処理 ---
+        // --- 👥 ゲストが受信する処理 ---
         if (data.type === "SYNC") {
+            // ホストからのゲーム状態を完全上書き（同期）
             Object.assign(game, data.gameState);
             rawPlayerList = data.rawPlayerList;
+            
+            // ゲスト画面にも設定UIがあるか確認し、無ければ生成、あれば数値を同期
+            syncGuestSettingsUI(data.gameState.cardSettings);
             updateUI();
         }
     }
@@ -435,11 +444,11 @@ function broadcastState() {
     });
 }
 
-// --- 🎮 ゲーム制御ボタン用関数 (HTMLのonclickに対応) ---
+// --- 🎮 ゲーム制御ボタン用関数 ---
 function hostStartGame() {
     if (!isHost) return;
     
-    // ゲームが開始される直前のタイミングで、最新のカスタムカード枚数入力を取得し反映
+    // 入力値の取得
     for (let i = 1; i <= 8; i++) {
         const inputEl = document.getElementById(`card-count-${i}`);
         if (inputEl) {
@@ -451,9 +460,7 @@ function hostStartGame() {
     if (success) {
         document.getElementById("start-game-btn").style.display = "none";
         document.getElementById("next-round-btn").style.display = "none";
-        document.getElementById("reset-game-btn").style.display = "block";
         
-        // 【修正点】ゲームが始まったら、カード枚数設定用のUIエリアを非表示にする
         const settingsArea = document.getElementById("host-card-settings-area");
         if (settingsArea) settingsArea.style.display = "none";
 
@@ -464,56 +471,118 @@ function hostStartGame() {
 
 function hostNextRound() {
     if (!isHost) return;
-    
-    // 次のラウンドへ進む前に、設定エリアを念のため再度表示（設定を微調整できるようにする）
-    const settingsArea = document.getElementById("host-card-settings-area");
-    if (settingsArea) settingsArea.style.display = "block";
-    
     hostStartGame();
 }
 
-function hostResetEntireGame() {
+// 🛑 今回追加：現在のゲームを終了(勝敗なし)するボタンの処理
+function hostAbortGame() {
     if (!isHost) return;
-    location.reload();
+    if (!confirm("現在のゲームを勝敗なしで終了し、待機室に戻しますか？")) return;
+
+    game.isGameStarted = false;
+    game.deck = [];
+    game.players.forEach(p => { p.hand = []; p.alive = true; p.history = []; p.protected = false; });
+    game.log("⚠️ ホストによって現在のゲームが強制終了されました(勝敗なし)。");
+    
+    broadcastState();
+    updateUI();
 }
 
 // --- 🖥️ UI描画・DOM操作ロジック ---
 
-// 【修正関数】部屋を作った後のゲームコンテナ内に、カスタム設定UIを挿入する
+// 部屋を作った後にホスト専用の設定UIを組み込む
 function injectCustomSettingsUIIntoGame() {
     const gameContainer = document.getElementById("game-container");
     const targetNode = document.getElementById("log-box");
     if (!gameContainer || !targetNode) return;
-
-    // 重複防止
     if (document.getElementById("host-card-settings-area")) return;
 
     const wrapper = document.createElement("div");
     wrapper.className = "custom-card-settings";
     wrapper.id = "host-card-settings-area";
-    wrapper.innerHTML = `<h3>🃏 カード初期枚数のカスタム設定（ホスト用）</h3>`;
+    wrapper.innerHTML = `<h3>🃏 カード初期枚数のカスタム設定（ホスト専用）</h3>`;
 
     for (const [val, config] of Object.entries(game.cardSettings)) {
         const item = document.createElement("div");
         item.className = "setting-item";
+        // ホスト用なので通常入力コントロール
         item.innerHTML = `
             <span class="setting-card-info">強さ${val}: ${config.name}</span>
             <div class="setting-input-wrapper">
-                <input type="number" id="card-count-${val}" value="${config.count}" min="0" max="10"> 枚
+                <input type="number" id="card-count-${val}" value="${config.count}" min="0" max="10" onchange="onHostChangeCount(${val}, this.value)"> 枚
             </div>
         `;
         wrapper.appendChild(item);
     }
-    // ログボックスの手前に挿入（プレイヤーを待ちながら設定可能）
     gameContainer.insertBefore(wrapper, targetNode);
 }
 
-// 待機中のプレイヤーリスト更新（ゲーム開始前用）
+// ホストが枚数値をいじった時にリアルタイムでゲストに同期をかけるフック
+function onHostChangeCount(val, value) {
+    if(!isHost) return;
+    game.updateCardCount(val, parseInt(value) || 0);
+    broadcastState();
+}
+
+// ゲスト側に閲覧専用（薄暗く、操作不可）の設定UIを生成＆同期させる関数
+function syncGuestSettingsUI(hostCardSettings) {
+    const gameContainer = document.getElementById("game-container");
+    const targetNode = document.getElementById("log-box");
+    if (!gameContainer || !targetNode) return;
+
+    let wrapper = document.getElementById("host-card-settings-area");
+    
+    // まだ設定枠自体が存在しない場合は作成
+    if (!wrapper) {
+        wrapper = document.createElement("div");
+        wrapper.id = "host-card-settings-area";
+        gameContainer.insertBefore(wrapper, targetNode);
+    }
+
+    // ゲスト（視聴側）用のクラス・文言に固定
+    wrapper.className = "custom-card-settings guest-view-only";
+    wrapper.innerHTML = `<h3>🃏 カード初期枚数の設定状況（ホストが設定中…）</h3>`;
+
+    for (let i = 1; i <= 8; i++) {
+        const config = hostCardSettings[i];
+        const item = document.createElement("div");
+        item.className = "setting-item";
+        // disabled属性を付与して完全に操作・フォーカスを拒否
+        item.innerHTML = `
+            <span class="setting-card-info">強さ${i}: ${config.name}</span>
+            <div class="setting-input-wrapper">
+                <input type="number" id="card-count-${i}" value="${config.count}" disabled> 枚
+            </div>
+        `;
+        wrapper.appendChild(item);
+    }
+}
+
+// 全カード使用状況の下に「ゲーム終了」ボタンを配置する関数
+function injectAbortButton() {
+    const trackerContainer = document.getElementById("card-tracker-container");
+    if (!trackerContainer) return;
+
+    // 既に配置済みならスキップ
+    if(document.getElementById("abort-game-btn")) return;
+
+    const abortBtn = document.createElement("button");
+    abortBtn.id = "abort-game-btn";
+    abortBtn.innerText = "🛑 現在のゲームを終了 (勝敗なし)";
+    abortBtn.style.background = "#d35400";
+    abortBtn.style.marginTop = "15px";
+    abortBtn.style.display = "none"; // 初期状態は隠す
+    abortBtn.onclick = hostAbortGame;
+
+    // トラッカー（container）の真後ろ、内部の下部に追加
+    trackerContainer.appendChild(abortBtn);
+}
+
+// 待機中のプレイヤーリスト更新
 function updatePlayerListUI() {
     const listArea = document.getElementById("player-list");
     if (!listArea) return;
     
-    // ゲーム開始前はシンプルなロスターを表示、開始後はプレイヤーアイテム形式に切り替わる
     if (!game.isGameStarted) {
         listArea.innerHTML = "<h4>現在の参加メンバー:</h4>";
         rawPlayerList.forEach(p => {
@@ -535,27 +604,44 @@ function updateUI() {
         roleDisplay.innerText = me.alive ? (me.protected ? "🛡️ 僧侶ガード中" : "🟢 生存") : "💀 脱落";
     }
 
-    // ホスト用のコントロールボタンの切り替え表示
+    // --- 👑 ホスト/ゲスト権限に基づくボタン表示制御（譲渡事故防止） ---
+    const abortBtn = document.getElementById("abort-game-btn");
+    
     if (isHost) {
+        // ホストの場合
         if (!game.isGameStarted) {
-            document.getElementById("next-round-btn").style.display = "block";
-            // 次のラウンド待ち状態の時は設定UIを再び出せるようにする
+            document.getElementById("start-game-btn").style.display = "block";
+            document.getElementById("next-round-btn").style.display = (game.players.length > 0) ? "block" : "none";
+            if(abortBtn) abortBtn.style.display = "none"; // 開始前は終了ボタン不要
+            
             const settingsArea = document.getElementById("host-card-settings-area");
             if (settingsArea) settingsArea.style.display = "block";
         } else {
+            // ゲーム中
+            document.getElementById("start-game-btn").style.display = "none";
             document.getElementById("next-round-btn").style.display = "none";
+            if(abortBtn) abortBtn.style.display = "block"; // ゲーム中のみ終了ボタンを出現させる
+        }
+    } else {
+        // ゲスト（子）の場合はゲーム制御系、強制終了ボタンは絶対に不可視化
+        document.getElementById("start-game-btn").style.display = "none";
+        document.getElementById("next-round-btn").style.display = "none";
+        if(abortBtn) abortBtn.style.display = "none";
+
+        // ゲスト側のカード設定欄の出し入れ設定
+        const settingsArea = document.getElementById("host-card-settings-area");
+        if (settingsArea) {
+            settingsArea.style.display = !game.isGameStarted ? "block" : "none";
         }
     }
 
     // プレイヤーボード（全員分）の表示更新
     const pList = document.getElementById("player-list");
     
-    // ゲームが始まっている場合のみ詳細カードビューを構築
     if (game.isGameStarted) {
         pList.innerHTML = "";
         game.players.forEach((p, idx) => {
             const isCurrentTurn = game.turnIndex === idx;
-            
             const pItem = document.createElement("div");
             pItem.className = `player-item ${isCurrentTurn ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
             
@@ -587,7 +673,6 @@ function updateUI() {
             pList.appendChild(pItem);
         });
     } else {
-        // 開始前はシンプルなリスト
         updatePlayerListUI();
     }
 
@@ -621,7 +706,6 @@ function updateUI() {
         handTitle.style.display = "none";
     }
 
-    // トラッカー（カウンティング機能）の更新
     updateTrackerUI();
 }
 
@@ -692,7 +776,6 @@ function selectActionTarget(cardValue) {
     tButtons.appendChild(cancelBtn);
 }
 
-// 兵士用カード予測UI
 function selectGuessCard(targetPlayerId) {
     const tButtons = document.getElementById("target-buttons");
     tButtons.innerHTML = "<h4>予測するカードを選択:</h4>";
@@ -710,7 +793,6 @@ function selectGuessCard(targetPlayerId) {
     }
 }
 
-// カードの実行指示
 function executeCardPlay(playerId, cardValue, target) {
     if (isHost) {
         game.playCard(playerId, cardValue, target);
