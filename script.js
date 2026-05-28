@@ -1,7 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
- * JSONシリアライズにより PeerJS の ArrayBuffer 強制変換（文字化け）を完全に防ぐバージョン
+ * serialization: "none" を強制し、PeerJS の勝手なバイナリ変換（文字化け）を根本から100%遮断するバージョン
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -330,7 +330,7 @@ function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
-// 🔄【重要】送信データをJSONテキスト化して安全に送るためのラッパー関数
+// 🔄【重要】完全な生テキストとしてパケット送信する
 function safeSend(conn, dataObj) {
     if (conn && conn.open) {
         try {
@@ -354,6 +354,7 @@ window.addEventListener('load', () => {
         document.getElementById("my-peer-id").innerText = "部屋ID生成失敗。再読み込みしてください。";
     });
 
+    // ホスト側の接続待ち受け
     peer.on('connection', (conn) => {
         if (!isHost) {
             conn.close();
@@ -361,8 +362,8 @@ window.addEventListener('load', () => {
         }
         connections.push(conn);
         conn.on('data', (rawMsg) => {
-            // 🔄【重要】受け取ったJSON文字列をオブジェクトに復元
             try {
+                // 🔄 文字列化されているデータを安全にパース
                 const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
                 handleReceivedData(data, conn);
             } catch(e) {
@@ -407,7 +408,11 @@ function joinRoom() {
     }
 
     game.log(`🌐 部屋 ${targetRoomId} に接続を試みています…`);
-    connToHost = peer.connect(targetRoomId);
+    
+    // 🔄【文字化けの根本対策】接続時に serialization: "none" を絶対指定してバイナリ変換を完全拒否
+    connToHost = peer.connect(targetRoomId, {
+        serialization: "none"
+    });
 
     connToHost.on('open', () => {
         isHost = false; 
@@ -416,13 +421,12 @@ function joinRoom() {
         
         game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！ゲーム開始を待っています。`);
         
-        // 🔄 safeSendを使用して送信
         safeSend(connToHost, { type: "JOIN", name: myPlayerName, id: myId });
     });
 
     connToHost.on('data', (rawMsg) => {
-        // 🔄【重要】受け取ったJSON文字列をオブジェクトに復元
         try {
+            // 🔄 文字列化されているデータを安全にパース
             const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
             handleReceivedData(data, null);
         } catch(e) {
@@ -485,7 +489,6 @@ function broadcastState() {
         rawPlayerList: rawPlayerList
     };
     
-    // 🔄 すべての接続先に safeSend で安全に一斉送信
     connections.forEach(c => {
         safeSend(c, syncData);
     });
@@ -869,7 +872,6 @@ function executeCardPlay(playerId, cardValue, target) {
         broadcastState();
         updateUI();
     } else {
-        // 🔄 safeSendを使用して送信
         safeSend(connToHost, {
             type: "ACTION",
             playerId: playerId,
