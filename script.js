@@ -1,7 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・カスタム同期機能搭載）
- * 接続トラブルを極限まで減らすため、広域パブリックICE（STUN/TURN）を設定
+ * 【2026安定版】接続ログの可視化、Cloudflare STUN、詳細エラーハンドリング搭載
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -360,7 +360,7 @@ function safeSend(conn, dataObj) {
     }
 }
 
-// 🌐 接続環境を最高クラスに引き上げるための高可用性ICEサーバー群
+// 🌐 回線相性を最大まで突破するための最新パブリックICE（STUN）サーバーリスト
 const globalIceConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -368,9 +368,7 @@ const globalIceConfig = {
         { urls: 'stun:stun2.l.google.com:19302' },
         { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:stun4.l.google.com:19302' },
-        { urls: 'stun:stun.ekiga.net' },
-        { urls: 'stun:stun.ideasip.com' },
-        { urls: 'stun:stun.schlund.de' }
+        { urls: 'stun:stun.cloudflare.com:3478' }
     ],
     iceCandidatePoolSize: 10
 };
@@ -378,9 +376,9 @@ const globalIceConfig = {
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
     
-    // 安全にシグナリングを開始する設定
     peer = new Peer(myId, {
-        debug: 2,
+        debug: 3, 
+        secure: true,
         config: globalIceConfig
     });
 
@@ -389,8 +387,20 @@ window.addEventListener('load', () => {
     });
 
     peer.on('error', (err) => {
-        console.error("PeerJSエラー発生:", err);
-        document.getElementById("my-peer-id").innerText = `エラーが発生しました (${err.type})`;
+        console.error("PeerJSシステムエラー:", err);
+        // 参加側がロビー画面でもエラーを把握できるようにログ表示
+        if (!game.isGameStarted) {
+            document.getElementById("setup-container").style.display = "block";
+            document.getElementById("game-container").style.display = "block"; // ログを見せるために一時展開
+        }
+        
+        if (err.type === 'peer-unavailable') {
+            game.log(`❌ 接続失敗: 部屋ID「${document.getElementById("room-id-input").value}」が見つかりません。番号が間違っているか、ホストが部屋を閉じています。`);
+        } else if (err.type === 'network') {
+            game.log("❌ 接続失敗: ネットワークエラーが発生しました。お互いにWi-Fiを切ってキャリア回線（4G/5G）でお試しください。");
+        } else {
+            game.log(`❌ エラーが発生しました (タイプ: ${err.type})`);
+        }
     });
 
     peer.on('connection', (conn) => {
@@ -455,25 +465,35 @@ function joinRoom() {
         return;
     }
 
-    game.log(`🌐 部屋 ${targetRoomId} に接続を試みています…`);
+    // 📥 参加者側の画面にリアルタイムな接続進捗ログを出力
+    document.getElementById("game-container").style.display = "block"; // ログを見せるためにコンテナを先行表示
+    game.logData = []; // ログを一旦リセット
+    game.log(`⏳ 部屋「${targetRoomId}」への接続を試みています…`);
     
-    // 接続確立を安定させるために明示的に同じICE構成を設定
     connToHost = peer.connect(targetRoomId, { 
-        serialization: "none",
-        connectionOptions: {
-            constraints: {
-                mandatory: { AnswerToAndOfferFromConstraints: true },
-                optional: [{ DtlsSrtpKeyAgreement: true }]
-            }
-        }
+        serialization: "none"
     });
+
+    // 接続プロセス（ICEトンネル構築）の可視化
+    if (connToHost.peerConnection) {
+        connToHost.peerConnection.oniceconnectionstatechange = () => {
+            const state = connToHost.peerConnection.iceConnectionState;
+            if (state === "checking") {
+                game.log("🟡 P2P通信トンネルを構築中... (回線認証中)");
+            } else if (state === "connected" || state === "completed") {
+                game.log("🟢 ネットワーク経路の確立に成功しました！");
+            } else if (state === "failed") {
+                game.log("❌ 回線同士の直接接続に失敗しました。お互いのWi-Fiのセキュリティ制限が原因の可能性があります。");
+            }
+        };
+    }
 
     connToHost.on('open', () => {
         isHost = false; 
         document.getElementById("setup-container").style.display = "none";
-        document.getElementById("game-container").style.display = "block";
+        game.log(`✅ ホストへの通信接続に成功しました！入室をリクエスト中…`);
         
-        game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！`);
+        // ホストに自分の情報を送信
         safeSend(connToHost, { type: "JOIN", name: myPlayerName, id: myId });
     });
 
@@ -487,7 +507,7 @@ function joinRoom() {
     });
 
     connToHost.on('close', () => {
-        alert("ホストとの接続が切れたか、キックされました。");
+        alert("ホストとの接続が切れたか、入室が拒否されました。");
         location.reload();
     });
 }
@@ -552,8 +572,15 @@ function handleReceivedData(data, conn) {
         }
     } else {
         if (data.type === "SYNC") {
+            // ホストからデータが同期された＝完全に同期・入室成功
+            if (game.logData.length <= 2) {
+                // 初回同期時のみ歓迎ログを追加
+                game.log("🎉 部屋の同期が完了しました！ゲームの開始を待っています。");
+            }
             if (data.logData && Array.isArray(data.logData)) {
-                game.logData = data.logData;
+                // 接続ログを残しつつホスト側の本番ログと結合
+                const oldLogs = game.logData.filter(l => l.includes("⏳") || l.includes("🟡") || l.includes("🟢") || l.includes("✅"));
+                game.logData = [...oldLogs, ...data.logData];
                 renderLogBox(game.logData);
             }
             Object.assign(game, data.gameState);
