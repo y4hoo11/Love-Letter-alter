@@ -1,7 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
- * 初手ドロー枚数を「初期手札枚数」として完全適用＆全ログ同期修正版
+ * ログ同期を配列データ管理に変更し、通信時の文字化けを完全に修正したバージョン
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -21,7 +21,7 @@ class LoveLetterCustomGame {
 
         // ドロー枚数のカスタム設定用プロパティ
         this.drawSettings = {
-            firstTurnCount: 1, // 【正確な定義】ゲーム開始時に配られる「初期の手札枚数」
+            firstTurnCount: 1, // ゲーム開始時に配られる初期の手札枚数
             everyTurnCount: 1  // 毎ターンの手番がまわってきた時に引く枚数
         };
 
@@ -31,6 +31,9 @@ class LoveLetterCustomGame {
         this.players = [];       // { id, name, hand:[], alive:true, protected:false, history:[], score:0 }
         this.turnIndex = 0;
         this.isGameStarted = false;
+        
+        // 🔄【文字化け対策】ログを文字列の配列として内部保持する
+        this.logData = []; 
     }
 
     // ホストがカード枚数を変更するための関数
@@ -90,14 +93,14 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 🔄【修正】ゲーム開始時の「初手枚数」分、全員にカードをまとめて配りきる
+        // ゲーム開始時の「初手枚数」分、全員にカードをまとめて配りきる
         for (let player of this.players) {
             for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
                 if (this.deck.length > 0) {
                     player.hand.push(this.deck.pop());
                 }
             }
-            this.checkChancellorBurst(player); // 大臣の即バーストチェック
+            this.checkChancellorBurst(player); 
         }
 
         this.turnIndex = 0;
@@ -116,7 +119,6 @@ class LoveLetterCustomGame {
 
         currentPlayer.protected = false; // 僧侶解除
 
-        // 🔄【修正】手番がまわってきた時は、1番手もそれ以降も一律で「毎ターンのドロー枚数」を引く
         const drawCount = this.drawSettings.everyTurnCount;
 
         if (this.deck.length >= drawCount) {
@@ -133,11 +135,9 @@ class LoveLetterCustomGame {
                 return;
             }
             
-            // 🌐【重要】手番開始ログと山札減少をリアルタイムで全員に同期
             broadcastState();
             updateUI();
         } else {
-            // ドロー枚数が足りない場合は山札切れでラウンド終了
             this.endRound();
             return;
         }
@@ -304,10 +304,19 @@ class LoveLetterCustomGame {
     getAlivePlayers() { return this.players.filter(p => p.alive); }
     shuffle(a) { for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} }
     
-    // 🌐 ゲストにもログ変更を通知するため、独自のログ受信処理を組み込む
+    // 🔄【修正】文字化けを防止するため、HTMLタグではなく純粋なテキスト配列として蓄積する
     log(msg) {
-        const lb = document.getElementById("log-box");
-        if(lb) { lb.innerHTML += `<div>${msg}</div>`; lb.scrollTop = lb.scrollHeight; }
+        this.logData.push(msg);
+        renderLogBox(this.logData);
+    }
+}
+
+// 🔄【追加】データ配列からログBOXの画面描画を行う共通処理
+function renderLogBox(logsArray) {
+    const lb = document.getElementById("log-box");
+    if (lb) {
+        lb.innerHTML = logsArray.map(line => `<div>${line}</div>`).join("");
+        lb.scrollTop = lb.scrollHeight;
     }
 }
 
@@ -356,13 +365,11 @@ window.addEventListener('load', () => {
     updateTrackerUI();
 });
 
-// IDコピー機能
 document.getElementById("my-peer-id").addEventListener('click', () => {
     navigator.clipboard.writeText(myId);
     alert("部屋IDをコピーしました！友達に共有してください。");
 });
 
-// HTML内の「親として部屋を作る」に対応
 function beHost() {
     myPlayerName = document.getElementById("name-input").value.trim() || "ホスト";
     isHost = true; 
@@ -377,7 +384,6 @@ function beHost() {
     updatePlayerListUI();
 }
 
-// HTML内の「子として参加する」に対応
 function joinRoom() {
     const targetRoomId = document.getElementById("room-id-input").value.trim();
     myPlayerName = document.getElementById("name-input").value.trim() || "ゲスト";
@@ -410,7 +416,6 @@ function joinRoom() {
     });
 }
 
-// データの受送信ハンドラ
 function handleReceivedData(data, conn) {
     if (isHost) {
         if (data.type === "JOIN") {
@@ -428,11 +433,10 @@ function handleReceivedData(data, conn) {
         }
     } else {
         if (data.type === "SYNC") {
-            // ログの同期：ホスト側で追加された新しいログ行をゲストに反映
-            const lb = document.getElementById("log-box");
-            if(lb && data.logHTML) {
-                lb.innerHTML = data.logHTML;
-                lb.scrollTop = lb.scrollHeight;
+            // 🔄【修正】文字化け原因のHTML直送りを廃止し、安全な配列からログを再レンダリングする
+            if (data.logData && Array.isArray(data.logData)) {
+                game.logData = data.logData;
+                renderLogBox(game.logData);
             }
             
             Object.assign(game, data.gameState);
@@ -444,13 +448,12 @@ function handleReceivedData(data, conn) {
     }
 }
 
-// ホストから全員に現在の状況を配信 (ログデータも添付して同期)
+// ホストから全員に現在の状況を配信 (ログ配列を添付して同期)
 function broadcastState() {
     if (!isHost) return;
-    const lb = document.getElementById("log-box");
     const syncData = {
         type: "SYNC",
-        logHTML: lb ? lb.innerHTML : "", // ログエリアの全HTMLを送信
+        logData: game.logData, // 🔄【修正】生HTML文字列ではなく、ピュアな配列データを送る
         gameState: {
             deck: game.deck,
             removedCard: game.removedCard,
@@ -472,7 +475,6 @@ function broadcastState() {
 function hostStartGame() {
     if (!isHost) return;
     
-    // 入力値の取得（カード初期枚数）
     for (let i = 1; i <= 8; i++) {
         const inputEl = document.getElementById(`card-count-${i}`);
         if (inputEl) {
@@ -480,7 +482,6 @@ function hostStartGame() {
         }
     }
 
-    // 入力値の取得（ドロー枚数設定）
     const firstDrawEl = document.getElementById("draw-count-first");
     const everyDrawEl = document.getElementById("draw-count-every");
     if(firstDrawEl) game.drawSettings.firstTurnCount = parseInt(firstDrawEl.value) || 1;
@@ -497,7 +498,6 @@ function hostStartGame() {
         broadcastState();
         updateUI();
         
-        // 最初のターンを開始
         game.startTurn();
     }
 }
