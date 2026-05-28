@@ -1,6 +1,6 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
- * オンライン P2P対応（人数無制限・カードカスタマイズ機能搭載）
+ * オンライン P2P対応（人数無制限・ホスト作成後のカードカスタマイズ機能搭載）
  * 全文表示・エラーレス結合版
  */
 
@@ -303,13 +303,10 @@ function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
-// ページ読み込み時に自動でPeerを初期化（生成中で止まるのを防ぐ）
+// ページ読み込み時に自動でPeerを初期化
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
-    // 互換性パブリックシグナリングサーバーを使用
-    peer = new Peer(myId, {
-        debug: 1
-    });
+    peer = new Peer(myId, { debug: 1 });
 
     peer.on('open', (id) => {
         document.getElementById("my-peer-id").innerText = `あなたの部屋ID: ${id} (タップでコピー)`;
@@ -332,8 +329,6 @@ window.addEventListener('load', () => {
         });
     });
 
-    // 動的にカード枚数設定用のUIを生成して組み込む
-    injectCustomSettingsUI();
     updateTrackerUI();
 });
 
@@ -353,6 +348,9 @@ function beHost() {
     document.getElementById("game-container").style.display = "block";
     document.getElementById("start-game-btn").style.display = "block";
     
+    // 【修正点】部屋を作成した直後に、ゲーム画面内（ログの上辺り）にカスタム設定UIを動的に挿入する
+    injectCustomSettingsUIIntoGame();
+
     game.log(`🏠 部屋を作成しました（ID: ${myId}）。参加者を待っています…`);
     updatePlayerListUI();
 }
@@ -394,7 +392,6 @@ function handleReceivedData(data, conn) {
     if (isHost) {
         // --- ホストが受信する処理 ---
         if (data.type === "JOIN") {
-            // 重複チェックを挟んで追加
             if (!rawPlayerList.some(p => p.id === data.id)) {
                 rawPlayerList.push({ id: data.id, name: data.name });
                 game.log(`👥 ${data.name} が参加しました。`);
@@ -410,7 +407,6 @@ function handleReceivedData(data, conn) {
     } else {
         // --- ゲストが受信する処理 ---
         if (data.type === "SYNC") {
-            // ホストから送られてきたゲームデータを丸ごと同期
             Object.assign(game, data.gameState);
             rawPlayerList = data.rawPlayerList;
             updateUI();
@@ -443,7 +439,7 @@ function broadcastState() {
 function hostStartGame() {
     if (!isHost) return;
     
-    // 入力フォームから最新のカスタムカード枚数を取得してゲームに反映
+    // ゲームが開始される直前のタイミングで、最新のカスタムカード枚数入力を取得し反映
     for (let i = 1; i <= 8; i++) {
         const inputEl = document.getElementById(`card-count-${i}`);
         if (inputEl) {
@@ -456,6 +452,11 @@ function hostStartGame() {
         document.getElementById("start-game-btn").style.display = "none";
         document.getElementById("next-round-btn").style.display = "none";
         document.getElementById("reset-game-btn").style.display = "block";
+        
+        // 【修正点】ゲームが始まったら、カード枚数設定用のUIエリアを非表示にする
+        const settingsArea = document.getElementById("host-card-settings-area");
+        if (settingsArea) settingsArea.style.display = "none";
+
         broadcastState();
         updateUI();
     }
@@ -463,6 +464,11 @@ function hostStartGame() {
 
 function hostNextRound() {
     if (!isHost) return;
+    
+    // 次のラウンドへ進む前に、設定エリアを念のため再度表示（設定を微調整できるようにする）
+    const settingsArea = document.getElementById("host-card-settings-area");
+    if (settingsArea) settingsArea.style.display = "block";
+    
     hostStartGame();
 }
 
@@ -473,11 +479,14 @@ function hostResetEntireGame() {
 
 // --- 🖥️ UI描画・DOM操作ロジック ---
 
-// HTMLに存在しないカスタムカード設定入力エリアを動的に挿入
-function injectCustomSettingsUI() {
-    const setupContainer = document.getElementById("setup-container");
-    const targetNode = document.getElementById("host-setup");
-    if (!setupContainer || !targetNode) return;
+// 【修正関数】部屋を作った後のゲームコンテナ内に、カスタム設定UIを挿入する
+function injectCustomSettingsUIIntoGame() {
+    const gameContainer = document.getElementById("game-container");
+    const targetNode = document.getElementById("log-box");
+    if (!gameContainer || !targetNode) return;
+
+    // 重複防止
+    if (document.getElementById("host-card-settings-area")) return;
 
     const wrapper = document.createElement("div");
     wrapper.className = "custom-card-settings";
@@ -495,17 +504,22 @@ function injectCustomSettingsUI() {
         `;
         wrapper.appendChild(item);
     }
-    setupContainer.insertBefore(wrapper, targetNode);
+    // ログボックスの手前に挿入（プレイヤーを待ちながら設定可能）
+    gameContainer.insertBefore(wrapper, targetNode);
 }
 
-// 待機中のプレイヤーリスト更新
+// 待機中のプレイヤーリスト更新（ゲーム開始前用）
 function updatePlayerListUI() {
     const listArea = document.getElementById("player-list");
     if (!listArea) return;
-    listArea.innerHTML = "<h4>現在の参加メンバー:</h4>";
-    rawPlayerList.forEach(p => {
-        listArea.innerHTML += `<div>・${p.name} ${p.id === myId ? " (あなた)" : ""}</div>`;
-    });
+    
+    // ゲーム開始前はシンプルなロスターを表示、開始後はプレイヤーアイテム形式に切り替わる
+    if (!game.isGameStarted) {
+        listArea.innerHTML = "<h4>現在の参加メンバー:</h4>";
+        rawPlayerList.forEach(p => {
+            listArea.innerHTML += `<div style="padding: 4px 0;">・${p.name} ${p.id === myId ? " (あなた)" : ""}</div>`;
+        });
+    }
 }
 
 // 総合的なゲーム画面のUI更新
@@ -525,6 +539,9 @@ function updateUI() {
     if (isHost) {
         if (!game.isGameStarted) {
             document.getElementById("next-round-btn").style.display = "block";
+            // 次のラウンド待ち状態の時は設定UIを再び出せるようにする
+            const settingsArea = document.getElementById("host-card-settings-area");
+            if (settingsArea) settingsArea.style.display = "block";
         } else {
             document.getElementById("next-round-btn").style.display = "none";
         }
@@ -532,44 +549,47 @@ function updateUI() {
 
     // プレイヤーボード（全員分）の表示更新
     const pList = document.getElementById("player-list");
-    pList.innerHTML = "";
     
-    game.players.forEach((p, idx) => {
-        const isCurrentTurn = game.turnIndex === idx && game.isGameStarted;
-        
-        const pItem = document.createElement("div");
-        pItem.className = `player-item ${isCurrentTurn ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
-        
-        // 相手の手札裏面マーク（生存している枚数分）
-        let handBacks = "";
-        if (p.alive) {
-            const count = p.id === myId ? p.hand.length : 1; // 相手視点の手札枚数は1枚（またはターン中2枚）
-            for(let i=0; i<p.hand.length; i++) {
-                handBacks += `<div class="card-back"></div>`;
+    // ゲームが始まっている場合のみ詳細カードビューを構築
+    if (game.isGameStarted) {
+        pList.innerHTML = "";
+        game.players.forEach((p, idx) => {
+            const isCurrentTurn = game.turnIndex === idx;
+            
+            const pItem = document.createElement("div");
+            pItem.className = `player-item ${isCurrentTurn ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
+            
+            let handBacks = "";
+            if (p.alive) {
+                for(let i=0; i<p.hand.length; i++) {
+                    handBacks += `<div class="card-back"></div>`;
+                }
             }
-        }
 
-        // プレイ履歴のカード
-        let historyHTML = "";
-        p.history.forEach(hVal => {
-            historyHTML += `
-                <div class="history-card history-card-${hVal}">
-                    <div>${hVal}</div>
-                    <div class="h-name">${game.cardSettings[hVal].name}</div>
+            let historyHTML = "";
+            p.history.forEach(hVal => {
+                historyHTML += `
+                    <div class="history-card history-card-${hVal}">
+                        <div>${hVal}</div>
+                        <div class="h-name">${game.cardSettings[hVal].name}</div>
+                    </div>
+                `;
+            });
+
+            pItem.innerHTML = `
+                <div class="player-header">
+                    <strong>${p.name} ${p.id === myId ? "(あなた)" : ""}</strong>
+                    <span class="score-badge">🏆 ${p.score}勝</span>
                 </div>
+                <div class="enemy-hand-container">${handBacks}</div>
+                <div class="played-history">${historyHTML || "<span style='font-size:0.75rem;color:#7f8c8d;'>捨て札なし</span>"}</div>
             `;
+            pList.appendChild(pItem);
         });
-
-        pItem.innerHTML = `
-            <div class="player-header">
-                <strong>${p.name} ${p.id === myId ? "(あなた)" : ""}</strong>
-                <span class="score-badge">🏆 ${p.score}勝</span>
-            </div>
-            <div class="enemy-hand-container">${handBacks}</div>
-            <div class="played-history">${historyHTML || "<span style='font-size:0.75rem;color:#7f8c8d;'>捨て札なし</span>"}</div>
-        `;
-        pList.appendChild(pItem);
-    });
+    } else {
+        // 開始前はシンプルなリスト
+        updatePlayerListUI();
+    }
 
     // 自分の手札カードエリアの描写
     const cardArea = document.getElementById("card-area");
@@ -589,7 +609,6 @@ function updateUI() {
                 <div class="card-tooltip">${game.cardSettings[cVal].desc}</div>
             `;
             
-            // 自分のターンならクリックで発火可能
             if (isMyTurn) {
                 cardNode.onclick = () => selectActionTarget(cVal);
             } else {
@@ -612,7 +631,6 @@ function updateTrackerUI() {
     if (!trackerList) return;
     trackerList.innerHTML = "";
 
-    // 現ラウンドで、誰がどのカードを何枚使ったかを合計
     const usedCounts = { 1:0, 2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0 };
     game.players.forEach(p => {
         p.history.forEach(c => { usedCounts[c]++; });
@@ -642,7 +660,6 @@ function selectActionTarget(cardValue) {
     const tButtons = document.getElementById("target-buttons");
     tButtons.innerHTML = "";
 
-    // 2.僧侶、6.大臣、7.公爵、8.姫 は対象選択が不要（即座に場に流す）
     if ([2, 6, 7, 8].includes(cardValue)) {
         executeCardPlay(myId, cardValue, {});
         return;
@@ -650,9 +667,7 @@ function selectActionTarget(cardValue) {
 
     modal.style.display = "flex";
     
-    // 対象となる他の生存プレイヤーボタンを作成
     game.players.forEach(p => {
-        // 魔術師(4)は自分自身も対象にできる、それ以外は自分を除外
         if (cardValue !== 4 && p.id === myId) return;
         if (!p.alive) return;
 
@@ -661,7 +676,6 @@ function selectActionTarget(cardValue) {
         btn.style.marginBottom = "5px";
         btn.onclick = () => {
             if (cardValue === 1) {
-                // 兵士の場合はカードの当て推量画面へ
                 selectGuessCard(p.id);
             } else {
                 executeCardPlay(myId, cardValue, { targetPlayerId: p.id });
@@ -671,7 +685,6 @@ function selectActionTarget(cardValue) {
         tButtons.appendChild(btn);
     });
 
-    // キャンセルボタンを一番下に追加
     const cancelBtn = document.createElement("button");
     cancelBtn.innerText = "キャンセル";
     cancelBtn.style.background = "#e74c3c";
@@ -684,7 +697,6 @@ function selectGuessCard(targetPlayerId) {
     const tButtons = document.getElementById("target-buttons");
     tButtons.innerHTML = "<h4>予測するカードを選択:</h4>";
 
-    // 2番(僧侶)〜8番(姫)まで選択肢を用意
     for (let i = 2; i <= 8; i++) {
         const btn = document.createElement("button");
         btn.className = `btn-secondary`;
@@ -698,7 +710,7 @@ function selectGuessCard(targetPlayerId) {
     }
 }
 
-// カードの実行指示を出す（ホストなら直接処理、ゲストなら送信）
+// カードの実行指示
 function executeCardPlay(playerId, cardValue, target) {
     if (isHost) {
         game.playCard(playerId, cardValue, target);
