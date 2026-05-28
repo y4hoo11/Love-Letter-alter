@@ -131,6 +131,18 @@ button:active {
 }
 .btn-host-transfer:hover { background: #8e44ad; }
 
+#leave-room-btn {
+    background: #7f8c8d;
+    width: auto;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    margin: 0;
+}
+#leave-room-btn:hover {
+    background: #bdc3c7;
+    color: #2c3e50;
+}
+
 .status-panel {
     background: #1a252f;
     padding: 10px 15px;
@@ -143,7 +155,7 @@ button:active {
     border-left: 4px solid #f1c40f;
 }
 
-/* 👥 プレイヤーボード構造（参加人数無制限に対応） */
+/* 👥 プレイヤーボード構造 */
 .player-list-container {
     max-height: 300px;
     overflow-y: auto;
@@ -154,21 +166,20 @@ button:active {
     display: flex;
     flex-direction: column;
     padding: 12px;
-    border: 2px solid transparent;
+    border-left: 5px solid transparent;
     background: #2c3e50;
     margin-bottom: 8px;
     border-radius: 8px;
     transition: all 0.2s;
 }
 .player-item.active {
-    border-color: #2ecc71;
-    box-shadow: 0 0 12px rgba(46, 204, 113, 0.4);
+    border-left-color: #2ecc71 !important;
+    box-shadow: 0 0 12px rgba(46, 204, 113, 0.2);
     background: #34495e;
 }
 .player-item.eliminated {
     background: #1a252f;
-    opacity: 0.35;
-    border-color: #7f8c8d;
+    opacity: 0.4;
 }
 .player-header {
     display: flex;
@@ -182,24 +193,7 @@ button:active {
     display: flex;
     gap: 6px;
     margin-bottom: 8px;
-}
-.card-back {
-    width: 24px;
-    height: 34px;
-    background: linear-gradient(135deg, #7f8c8d 0%, #34495e 100%);
-    border: 1.5px solid #fff;
-    border-radius: 4px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-    position: relative;
-}
-.card-back::after {
-    content: "";
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 6px; height: 6px;
-    background: #e74c3c;
-    border-radius: 50%;
+    align-items: center;
 }
 
 /* 🎨 カード固有のクラスカラー定義 (1-8) */
@@ -223,23 +217,23 @@ button:active {
     min-height: 40px;
 }
 .history-card {
-    position: relative;
-    width: 40px;
-    height: 55px;
-    border: 1px solid #fff;
-    border-radius: 4px;
     display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    padding: 2px 4px;
-    font-size: 0.8rem;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    padding: 3px 8px;
+    border-radius: 4px;
     font-weight: bold;
     box-shadow: 2px 2px 4px rgba(0,0,0,0.3);
     box-sizing: border-box;
 }
+.history-card div:first-child {
+    background: rgba(0,0,0,0.25);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+}
 .history-card .h-name {
-    font-size: 0.5rem;
-    text-align: center;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -297,7 +291,7 @@ button:active {
     font-weight: bold;
 }
 
-/* 説明ツールチップ（PCホバー用） */
+/* 説明ツールチップ */
 .card .card-tooltip {
     visibility: hidden;
     opacity: 0;
@@ -326,7 +320,7 @@ button:active {
     }
 }
 
-/* カードトラッカー（下部の一覧） */
+/* カードトラッカー */
 #card-tracker-container {
     background: #1a252f;
     padding: 12px;
@@ -335,31 +329,32 @@ button:active {
     border: 1px solid #4f5d73;
 }
 #card-tracker-list {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr); /* カスタムルール用に4列に最適化 */
-    gap: 6px;
-}
-.tracker-item {
-    border: 1px solid #fff;
-    padding: 6px 2px;
-    border-radius: 6px;
-    text-align: center;
-    font-size: 0.7rem;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    gap: 5px;
+}
+.tracker-item {
+    padding: 6px 12px;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     box-sizing: border-box;
 }
-.tracker-item.used-up {
-    background: #555 !important;
-    border-color: #777 !important;
-    opacity: 0.25;
-    color: #aaa !important;
+.tracker-circles-container {
+    font-family: monospace;
+    letter-spacing: 2px;
+    display: flex;
+    align-items: center;
 }
-.tracker-num { font-size: 1rem; font-weight: bold; }
-.tracker-name { font-weight: bold; font-size: 0.65rem; white-space: nowrap; overflow: hidden; }
-.tracker-count { font-size: 0.65rem; background: rgba(0,0,0,0.4); margin-top: 4px; border-radius: 3px; padding: 1px 0; }
+.circle-active { color: #fff; text-shadow: 0 0 3px rgba(255,255,255,0.6); }
+.circle-used { color: #fff; }
+
+.tracker-item.used-up {
+    background: #2c3e50 !important;
+    opacity: 0.25;
+    border: 1px dashed #7f8c8d;
+}
+.tracker-num { font-size: 0.9rem; font-weight: bold; }
+.tracker-name { font-weight: bold; font-size: 0.8rem; }
 
 /* 📥 モーダルウィンドウ */
 .modal {
@@ -377,17 +372,18 @@ button:active {
     padding: 20px;
     border-radius: 10px;
     text-align: center;
-    max-width: 320px;
-    width: 85%;
+    max-width: 350px;
+    width: 90%;
+    max-height: 85vh;
+    overflow-y: auto;
     box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     border: 1px solid #4f5d73;
+    box-sizing: border-box;
 }
 #target-buttons {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 250px;
-    overflow-y: auto;
 }
 .score-badge {
     background: #f1c40f;
@@ -399,7 +395,20 @@ button:active {
     margin-left: 5px;
 }
 
-/* 📱 スマホ対応レスポンシブ */
+/* スクロールバーカスタム */
+.modal-content::-webkit-scrollbar,
+.player-list-container::-webkit-scrollbar,
+#log-box::-webkit-scrollbar {
+    width: 6px;
+}
+.modal-content::-webkit-scrollbar-thumb,
+.player-list-container::-webkit-scrollbar-thumb,
+#log-box::-webkit-scrollbar-thumb {
+    background: #4f5d73;
+    border-radius: 3px;
+}
+
+/* 📱 スマホ対応 */
 @media (max-width: 480px) {
     body { padding: 10px; }
     #setup-container, #game-container { padding: 12px; }
@@ -407,25 +416,24 @@ button:active {
     .card { width: 85px; height: 120px; }
     .card-num { font-size: 1.8rem; }
     .card-name { font-size: 0.85rem; }
-    #card-tracker-list { grid-template-columns: repeat(3, 1fr); gap: 4px; } /* スマホは3列に */
-    .tracker-item { font-size: 0.6rem; padding: 4px 1px; }
+    .tracker-item { padding: 5px 8px; }
+    .tracker-num { font-size: 0.85rem; }
+    .tracker-name { font-size: 0.75rem; }
+    .circle-active, .circle-used { font-size: 0.9rem; }
 }
 
-/* ゲスト（視聴・参加者側）の枚数カスタムUIのスタイル設定 */
+/* ゲスト用のスタイル */
 .custom-card-settings.guest-view-only {
-    background: #111a22;          /* ホスト側よりさらに暗い背景に */
-    opacity: 0.5;                 /* 全体を薄暗く（半透明）に */
-    pointer-events: none;         /* マウスクリック、スマホのタップ、選択を完全無効化 */
-    border: 1px dashed #7f8c8d;   /* 編集不可を表す点線枠に変更 */
+    background: #111a22; 
+    opacity: 0.5;         
+    pointer-events: none; 
+    border: 1px dashed #7f8c8d; 
 }
-
 .custom-card-settings.guest-view-only input[type="number"] {
-    background: #7f8c8d;          /* 入力欄の背景もグレーアウト */
+    background: #7f8c8d; 
     color: #34495e;
-    cursor: not-allowed;          /* 禁止マークのカーソル */
+    cursor: not-allowed; 
 }
-
-/* 強制終了ボタンのホバーエフェクト */
 #abort-game-btn:hover {
     background: #c0392b !important;
 }
