@@ -425,3 +425,42 @@ button:active {
 #abort-game-btn:hover {
     background: #c0392b !important;
 }
+
+/* 赤い裏面カードのベーススタイル */
+.card-back-red {
+    position: relative;
+    width: 100px;
+    height: 140px;
+    background: linear-gradient(135deg, #e74c3c, #c0392b); /* 深みのある赤 */
+    border: 4px solid #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #ffffff;
+    font-family: Arial, sans-serif;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.card-back-red:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+}
+
+/* カード中央の「枚数」を表すバッジ */
+.card-back-center-badge {
+    background: rgba(0, 0, 0, 0.6); /* 黒半透明 */
+    border: 2px solid #f1c40f;      /* ゴールドの枠線 */
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: #f1c40f;
+    box-shadow: inset 0 0 5px rgba(0,0,0,0.5);
+}
