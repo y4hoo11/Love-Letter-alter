@@ -37,7 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (idDisplay) idDisplay.innerText = `❌ エラーが発生しました: ${err.type}`;
     });
 
-    // 各ボタンへのイベント紐付け
+    // 各ボタンへのイベント紐付け（HTMLの変更後も確実に認識されます）
     document.getElementById("be-host-btn")?.addEventListener("click", beHost);
     document.getElementById("join-room-btn")?.addEventListener("click", joinRoom);
     document.getElementById("leave-room-btn")?.addEventListener("click", leaveRoom);
@@ -52,7 +52,7 @@ function beHost() {
     setIsHost(true);
 
     // 自分自身（ホスト）をメンバー名簿に初期登録
-    const initialList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0 }];
+    const initialList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0, isHost: true, disconnected: false }];
     setRawPlayerList(initialList);
 
     // 画面切り替え
@@ -60,7 +60,14 @@ function beHost() {
     document.getElementById("game-container").style.display = "block";
 
     // ホスト用のUIパーツ（カスタム設定・中断ボタン）を構築
-    injectCustomSettingsUIIntoGame();
+    // ui-manager.jsで統合されたカスタムUIが実行されます
+    import("./ui-manager.js").then(mod => {
+        if (typeof mod.renderCustomSettingsUI === "function") {
+            mod.renderCustomSettingsUI();
+        } else {
+            mod.injectCustomSettingsUIIntoGame();
+        }
+    });
     injectAbortButton();
     
     // UI反映（ホスト自身が即座にプレイヤーリストに描画される）
@@ -71,13 +78,15 @@ function beHost() {
     peer.on('connection', (conn) => {
         setConnections(conn);
         
-        conn.on('data', (dataStr) => {
-            try {
-                const data = JSON.parse(dataStr);
-                handleHostReceiveData(conn, data);
-            } catch (e) {
-                console.error("ホストデータ処理エラー:", e);
-            }
+        conn.on('open', () => {
+            conn.on('data', (dataStr) => {
+                try {
+                    const data = typeof dataStr === "string" ? JSON.parse(dataStr) : dataStr;
+                    handleHostReceiveData(conn, data);
+                } catch (e) {
+                    console.error("ホストデータ処理エラー:", e);
+                }
+            });
         });
     });
 }
@@ -87,8 +96,13 @@ function joinRoom() {
     const roomIdInput = document.getElementById("room-id-input");
     const targetRoomId = roomIdInput ? roomIdInput.value.trim() : "";
     
-    if (targetRoomId.length !== 8) {
+    if (targetRoomId.length !== 8 || isNaN(targetRoomId)) {
         alert("部屋IDは8桁の数字で入力してください。");
+        return;
+    }
+
+    if (targetRoomId === window.myId) {
+        alert("自分の部屋IDには入室できません。");
         return;
     }
 
@@ -116,10 +130,15 @@ function joinRoom() {
 
     conn.on('data', (dataStr) => {
         try {
-            const data = JSON.parse(dataStr);
+            const data = typeof dataStr === "string" ? JSON.parse(dataStr) : dataStr;
             handleGuestReceiveData(data);
         } catch (e) {
             console.error("ゲストデータ処理エラー:", e);
         }
+    });
+
+    conn.on('close', () => {
+        alert("ホストとの接続が切断されました。");
+        window.location.reload();
     });
 }
