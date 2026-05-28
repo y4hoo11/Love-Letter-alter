@@ -1,7 +1,10 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
- * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
- * serialization: "none" を強制し、PeerJS の勝手なバイナリ変換（文字化け）を根本から100%遮断するバージョン
+ * オンライン P2P対応（人数無制限・カスタム同期機能搭載）
+ * 修正点：
+ * 1. カードトラッカーを残り枚数分の「●」マーク表示に変更（色はCSSクラス経由またはデフォルト色）
+ * 2. 兵士の効果を相手の「特定位置の1枚」を対象にするよう変更
+ * 3. プレイヤー情報欄に相手の手札が何枚目か（[1枚目][2枚目]...）を可視化
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -9,32 +12,30 @@ class LoveLetterCustomGame {
     constructor() {
         // デフォルトのカード設定（アークライト公式準拠）
         this.cardSettings = {
-            1: { name: "兵士", value: 1, count: 5, desc: "他プレイヤー1人の手札を予測（兵士以外）。的中すれば脱落。" },
+            1: { name: "兵士", value: 1, count: 5, desc: "他プレイヤーの指定した1枚の手札を予測（兵士以外）。的中すれば脱落。" },
             2: { name: "僧侶", value: 2, count: 2, desc: "次の自分の手番まで、自分へのカード効果を無効化する。" },
             3: { name: "騎士", value: 3, count: 2, desc: "他プレイヤー1人と手札を比較。数字が小さい方が脱落。" },
-            4: { name: "魔術師", value: 4, count: 2, desc: "自分含む1人を指名。手札を捨てさせ山札から1枚引かせる。" },
-            5: { name: "将軍", value: 5, count: 2, desc: "他プレイヤー1人を指名し、お互いの手札を交換する。" },
+            4: { name: "魔術師", value: 4, count: 2, desc: "自分含む1人を指名。指定した1枚を捨てさせ山札から1枚引かせる。" },
+            5: { name: "将軍", value: 5, count: 2, desc: "他プレイヤー1人を指名し、お互いの手札を全交換する。" },
             6: { name: "大臣", value: 6, count: 1, desc: "手札に入った時点で、もう1枚との合計が12以上なら即脱落。" },
             7: { name: "公爵", value: 7, count: 1, desc: "効果なし。ただし、4(魔術師)か5(将軍)と同時に持つと強制廃棄。" },
             8: { name: "姫", value: 8, count: 1, desc: "このカードを捨てる、または捨てさせられた場合、即脱落。" }
         };
 
-        // ドロー枚数のカスタム設定用プロパティ
         this.drawSettings = {
-            firstTurnCount: 1, // ゲーム開始時に配られる初期の手札枚数
-            everyTurnCount: 1  // 毎ターンの手番がまわってきた時に引く枚数
+            firstTurnCount: 1, 
+            everyTurnCount: 1  
         };
 
         this.deck = [];
         this.removedCard = null; 
         this.faceUpCards = [];   
-        this.players = [];       // { id, name, hand:[], alive:true, protected:false, history:[], score:0 }
+        this.players = [];       
         this.turnIndex = 0;
         this.isGameStarted = false;
         this.logData = []; 
     }
 
-    // ホストがカード枚数を変更するための関数
     updateCardCount(cardValue, newCount) {
         if (this.isGameStarted) return false;
         if (this.cardSettings[cardValue] && newCount >= 0) {
@@ -44,14 +45,12 @@ class LoveLetterCustomGame {
         return false;
     }
 
-    // ラウンド（ゲーム）の初期化
     initRound(playerList) {
         if (playerList.length < 2) {
             this.log("エラー: ゲームを開始するには2人以上のプレイヤーが必要です。");
             return false;
         }
 
-        // デッキの再構築
         this.deck = [];
         for (const [value, config] of Object.entries(this.cardSettings)) {
             for (let i = 0; i < config.count; i++) {
@@ -59,7 +58,6 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 必要枚数のチェック (初期手札枚数と毎ターンドローを考慮)
         const minRequired = (playerList.length * this.drawSettings.firstTurnCount) + this.drawSettings.everyTurnCount + (playerList.length < 4 ? 4 : 1);
         if (this.deck.length < minRequired) {
             this.log(`エラー: カードの総枚数(${this.deck.length}枚)が不足しています。枚数を増やしてください。`);
@@ -68,7 +66,6 @@ class LoveLetterCustomGame {
 
         this.shuffle(this.deck);
 
-        // プレイヤー状態の初期化（スコアは維持）
         this.players = playerList.map(p => {
             const existing = this.players.find(ep => ep.id === p.id);
             return {
@@ -82,7 +79,6 @@ class LoveLetterCustomGame {
             };
         });
 
-        // ルール準拠：カードの脇置き除外処理
         this.removedCard = this.deck.pop();
         this.faceUpCards = [];
         if (this.players.length < 4) {
@@ -91,7 +87,6 @@ class LoveLetterCustomGame {
             }
         }
 
-        // ゲーム開始時の「初手枚数」分、全員にカードをまとめて配りきる
         for (let player of this.players) {
             for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
                 if (this.deck.length > 0) {
@@ -107,7 +102,6 @@ class LoveLetterCustomGame {
         return true;
     }
 
-    // ターン開始
     startTurn() {
         let currentPlayer = this.players[this.turnIndex];
         if (!currentPlayer.alive) {
@@ -115,7 +109,7 @@ class LoveLetterCustomGame {
             return;
         }
 
-        currentPlayer.protected = false; // 僧侶解除
+        currentPlayer.protected = false; 
 
         const drawCount = this.drawSettings.everyTurnCount;
 
@@ -126,7 +120,6 @@ class LoveLetterCustomGame {
             }
             this.log(`👉 ${currentPlayer.name} の手番（${drawCount}枚ドロー / 山札残: ${this.deck.length}枚）`);
 
-            // 大臣チェック
             if (this.checkChancellorBurst(currentPlayer)) {
                 this.log(`💥 ${currentPlayer.name} は【大臣】のバースト（手札合計12以上）で脱落しました。`);
                 this.checkRoundEndConditions();
@@ -141,7 +134,7 @@ class LoveLetterCustomGame {
         }
     }
 
-    // カードのプレイ処理
+    // カードのプレイ処理 (targetの中に handIndex が追加されました)
     playCard(playerId, cardValue, target = {}) {
         let player = this.players.find(p => p.id === playerId);
         if (!player || !player.alive) return;
@@ -160,38 +153,57 @@ class LoveLetterCustomGame {
             return;
         }
 
+        // 対象の手札位置を特定 (デフォルトは0枚目)
+        const targetHandIdx = (target.handIndex !== undefined) ? target.handIndex : 0;
+
         switch(cardValue) {
             case 1: // 兵士
-                if (targetPlayer.hand[0] === target.guessCardValue) {
-                    this.log(`🎯 的中！ ${targetPlayer.name} の手札は【${this.cardSettings[target.guessCardValue].name}】でした。`);
+                // 🔄 相手の「指定された位置(1枚目、2枚目など)」のカードのみを判定対象にする
+                const targetCard = targetPlayer.hand[targetHandIdx];
+                this.log(`🏹 ${player.name} は ${targetPlayer.name} の 【${targetHandIdx + 1}枚目のカード】 を狙い、狙撃予測を【${this.cardSettings[target.guessCardValue].name}】と宣言。`);
+                
+                if (targetCard === target.guessCardValue) {
+                    this.log(`🎯 的中！ ${targetPlayer.name} の${targetHandIdx + 1}枚目の手札は【${this.cardSettings[target.guessCardValue].name}】でした。`);
                     targetPlayer.alive = false;
-                    this.handleDiscardEffects(targetPlayer, targetPlayer.hand[0]);
+                    // 全手札を捨て札へ
+                    while(targetPlayer.hand.length > 0) {
+                        this.handleDiscardEffects(targetPlayer, targetPlayer.hand.pop());
+                    }
                 } else {
-                    this.log(`❌ ハズレ！ ${targetPlayer.name} の手札は違いました。`);
+                    this.log(`❌ ハズレ！ その位置のカードは違いました。`);
                 }
                 break;
+
             case 2: // 僧侶
                 player.protected = true;
                 this.log(`🔮 ${player.name} は次の手番まで守られます。`);
                 break;
+
             case 3: // 騎士
-                this.log(`⚔️ ${player.name} と ${targetPlayer.name} が騎士で手札勝負。`);
-                if (player.hand[0] > targetPlayer.hand[0]) {
+                // 騎士の勝負も、複数枚手札がある場合は「指定位置のカード」同士で比較（デフォルトは最初の1枚）
+                const myCompareCard = player.hand[0] || cardValue; 
+                const enemyCompareCard = targetPlayer.hand[targetHandIdx] || targetPlayer.hand[0];
+                
+                this.log(`⚔️ ${player.name} の手札と ${targetPlayer.name} の【${targetHandIdx + 1}枚目の手札】で騎士の勝負。`);
+                
+                if (myCompareCard > enemyCompareCard) {
                     targetPlayer.alive = false;
                     this.log(`💀 ${targetPlayer.name} が敗北し脱落。`);
-                    this.handleDiscardEffects(targetPlayer, targetPlayer.hand[0]);
-                } else if (player.hand[0] < targetPlayer.hand[0]) {
+                    while(targetPlayer.hand.length > 0) this.handleDiscardEffects(targetPlayer, targetPlayer.hand.pop());
+                } else if (myCompareCard < enemyCompareCard) {
                     player.alive = false;
                     this.log(`💀 ${player.name} が敗北し脱落。`);
-                    this.handleDiscardEffects(player, player.hand[0]);
+                    while(player.hand.length > 0) this.handleDiscardEffects(player, player.hand.pop());
                 } else {
                     this.log("🤝 引き分け！両者無事でした。");
                 }
                 break;
+
             case 4: // 魔術師
-                this.log(`🪄 ${targetPlayer.name} の手札を強制廃棄。`);
-                const discarded = targetPlayer.hand.pop();
+                this.log(`🪄 ${targetPlayer.name} の【${targetHandIdx + 1}枚目の手札】を強制廃棄。`);
+                const discarded = targetPlayer.hand.splice(targetHandIdx, 1)[0];
                 targetPlayer.history.push(discarded);
+                
                 if (discarded === 8) {
                     targetPlayer.alive = false;
                     this.log(`💀 【姫】が捨てられたため、${targetPlayer.name} は即脱落！`);
@@ -205,17 +217,20 @@ class LoveLetterCustomGame {
                     this.checkChancellorBurst(targetPlayer);
                 }
                 break;
+
             case 5: // 将軍
-                this.log(`🔄 ${player.name} と ${targetPlayer.name} の手札を交換。`);
+                this.log(`🔄 ${player.name} と ${targetPlayer.name} のすべての手札を丸ごと交換。`);
                 let temp = player.hand;
                 player.hand = targetPlayer.hand;
                 targetPlayer.hand = temp;
                 this.checkChancellorBurst(player);
                 this.checkChancellorBurst(targetPlayer);
                 break;
+
             case 6: // 大臣
             case 7: // 公爵
                 break;
+
             case 8: // 姫
                 player.alive = false;
                 this.log(`💀 ${player.name} は【姫】を失い、脱落しました。`);
@@ -238,7 +253,6 @@ class LoveLetterCustomGame {
     }
 
     handleDiscardEffects(player, cardValue) {
-        player.hand = [];
         player.history.push(cardValue);
     }
 
@@ -330,7 +344,6 @@ function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
-// 🔄【重要】完全な生テキストとしてパケット送信する
 function safeSend(conn, dataObj) {
     if (conn && conn.open) {
         try {
@@ -354,7 +367,6 @@ window.addEventListener('load', () => {
         document.getElementById("my-peer-id").innerText = "部屋ID生成失敗。再読み込みしてください。";
     });
 
-    // ホスト側の接続待ち受け
     peer.on('connection', (conn) => {
         if (!isHost) {
             conn.close();
@@ -363,7 +375,6 @@ window.addEventListener('load', () => {
         connections.push(conn);
         conn.on('data', (rawMsg) => {
             try {
-                // 🔄 文字列化されているデータを安全にパース
                 const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
                 handleReceivedData(data, conn);
             } catch(e) {
@@ -409,7 +420,6 @@ function joinRoom() {
 
     game.log(`🌐 部屋 ${targetRoomId} に接続を試みています…`);
     
-    // 🔄【文字化けの根本対策】接続時に serialization: "none" を絶対指定してバイナリ変換を完全拒否
     connToHost = peer.connect(targetRoomId, {
         serialization: "none"
     });
@@ -426,7 +436,6 @@ function joinRoom() {
 
     connToHost.on('data', (rawMsg) => {
         try {
-            // 🔄 文字列化されているデータを安全にパース
             const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
             handleReceivedData(data, null);
         } catch(e) {
@@ -720,10 +729,12 @@ function updateUI() {
             const pItem = document.createElement("div");
             pItem.className = `player-item ${isCurrentTurn ? 'active' : ''} ${!p.alive ? 'eliminated' : ''}`;
             
+            // 🔄 相手の手札枚数に合わせた「1枚目」「2枚目」などの位置可視化
             let handBacks = "";
             if (p.alive) {
                 for(let i=0; i<p.hand.length; i++) {
-                    handBacks += `<div class="card-back"></div>`;
+                    // 何枚目か視認しやすいバッジスタイル
+                    handBacks += `<span class="card-back-index-badge" style="display:inline-block; margin:2px; padding:4px 8px; background:#34495e; color:#fff; border-radius:4px; font-size:0.75rem;">[${i+1}枚目]</span>`;
                 }
             }
 
@@ -742,7 +753,9 @@ function updateUI() {
                     <strong>${p.name} ${p.id === myId ? "(あなた)" : ""}</strong>
                     <span class="score-badge">🏆 ${p.score}勝</span>
                 </div>
-                <div class="enemy-hand-container">${handBacks}</div>
+                <div class="enemy-hand-container" style="margin: 5px 0;">
+                    <span style="font-size:0.8rem; color:#bdc3c7;">手札構成: </span>${handBacks || "<span style='font-size:0.75rem;color:#e74c3c;'>手札なし</span>"}
+                </div>
                 <div class="played-history">${historyHTML || "<span style='font-size:0.75rem;color:#7f8c8d;'>捨て札なし</span>"}</div>
             `;
             pList.appendChild(pItem);
@@ -759,13 +772,13 @@ function updateUI() {
         handTitle.style.display = "block";
         const isMyTurn = game.players[game.turnIndex].id === myId;
         
-        me.hand.forEach(cVal => {
+        me.hand.forEach((cVal, idx) => {
             const cardNode = document.createElement("div");
             cardNode.className = `card card-${cVal}`;
             cardNode.innerHTML = `
                 <div class="card-num">${cVal}</div>
                 <div class="card-name">${game.cardSettings[cVal].name}</div>
-                <div class="card-tooltip">${game.cardSettings[cVal].desc}</div>
+                <div class="card-tooltip">（自分の${idx+1}枚目の手札）<br>${game.cardSettings[cVal].desc}</div>
             `;
             
             if (isMyTurn) {
@@ -783,6 +796,7 @@ function updateUI() {
     updateTrackerUI();
 }
 
+// 🔄【修正】トラッカーを各カードのクラス色のまま「●」の数でぱっと見れる形に変更
 function updateTrackerUI() {
     const trackerList = document.getElementById("card-tracker-list");
     if (!trackerList) return;
@@ -797,19 +811,41 @@ function updateTrackerUI() {
         const total = game.cardSettings[i].count;
         const remaining = Math.max(0, total - usedCounts[i]);
         
+        // 残り枚数を「●」、消費された枚数を「〇」のマークで生成
+        let circlesHTML = "";
+        for (let r = 0; r < remaining; r++) {
+            circlesHTML += `<span class="circle-active" style="margin-right:2px; font-size:1.1rem; line-height:1;">●</span>`;
+        }
+        for (let u = 0; u < usedCounts[i]; u++) {
+            circlesHTML += `<span class="circle-used" style="margin-right:2px; opacity:0.3; font-size:1.1rem; line-height:1;">〇</span>`;
+        }
+
         const item = document.createElement("div");
-        item.className = `tracker-item tracker-${i} ${remaining === 0 ? 'used-up' : ''}`;
+        // card-1 ~ card-8 などの色指定クラスをそのまま利用できるように適用
+        item.className = `tracker-item card-${i} tracker-${i} ${remaining === 0 ? 'used-up' : ''}`;
+        item.style.display = "flex";
+        item.style.alignItems = "center";
+        item.style.justifyContent = "space-between";
+        item.style.padding = "6px 10px";
+        item.style.margin = "4px 0";
+        item.style.borderRadius = "4px";
+
         item.innerHTML = `
-            <div class="tracker-num">${i}</div>
-            <div class="tracker-name">${game.cardSettings[i].name}</div>
-            <div class="tracker-count">残 ${remaining}/${total}</div>
+            <div style="display:flex; align-items:center;">
+                <span class="tracker-num" style="font-weight:bold; margin-right:8px;">[${i}]</span>
+                <span class="tracker-name" style="font-weight:bold;">${game.cardSettings[i].name}</span>
+            </div>
+            <div class="tracker-circles-container" style="letter-spacing: 1px;">
+                ${circlesHTML}
+            </div>
         `;
         trackerList.appendChild(item);
     }
 }
 
-// --- 🎯 モーダル・ターゲット選択ロジック ---
+// --- 🎯 モーダル・ターゲット選択ロジック (何枚目かを指定させる分岐を追加) ---
 let currentSelectedCard = null;
+let currentTargetPlayerId = null;
 
 function selectActionTarget(cardValue) {
     currentSelectedCard = cardValue;
@@ -823,6 +859,7 @@ function selectActionTarget(cardValue) {
     }
 
     modal.style.display = "flex";
+    tButtons.innerHTML = "<h4>効果の対象プレイヤーを選択:</h4>";
     
     game.players.forEach(p => {
         if (cardValue !== 4 && p.id === myId) return;
@@ -830,13 +867,21 @@ function selectActionTarget(cardValue) {
 
         const btn = document.createElement("button");
         btn.innerText = p.name + (p.protected ? " (ガード中)" : "");
-        btn.style.marginBottom = "5px";
+        btn.style.marginBottom = "8px";
+        btn.style.width = "100%";
         btn.onclick = () => {
-            if (cardValue === 1) {
-                selectGuessCard(p.id);
+            currentTargetPlayerId = p.id;
+            // 🔄 兵士(1)または魔術師(4)か騎士(3)で相手の手札が複数ある場合、何枚目を対象にするか選択させる
+            if ([1, 3, 4].includes(cardValue) && p.hand.length > 1) {
+                selectTargetHandIndex(p);
             } else {
-                executeCardPlay(myId, cardValue, { targetPlayerId: p.id });
-                modal.style.display = "none";
+                // 手札が1枚だけなら自動的に0番目（1枚目）を対象にする
+                if (cardValue === 1) {
+                    selectGuessCard(p.id, 0);
+                } else {
+                    executeCardPlay(myId, cardValue, { targetPlayerId: p.id, handIndex: 0 });
+                    modal.style.display = "none";
+                }
             }
         };
         tButtons.appendChild(btn);
@@ -845,21 +890,51 @@ function selectActionTarget(cardValue) {
     const cancelBtn = document.createElement("button");
     cancelBtn.innerText = "キャンセル";
     cancelBtn.style.background = "#e74c3c";
+    cancelBtn.style.marginTop = "10px";
     cancelBtn.onclick = () => { modal.style.display = "none"; };
     tButtons.appendChild(cancelBtn);
 }
 
-function selectGuessCard(targetPlayerId) {
+// 🔄【追加】相手の何枚目のカードを効果対象にするか選ぶUI
+function selectTargetHandIndex(targetPlayer) {
     const tButtons = document.getElementById("target-buttons");
-    tButtons.innerHTML = "<h4>予測するカードを選択:</h4>";
+    tButtons.innerHTML = `<h4>${targetPlayer.name} の何枚目のカードを対象にしますか？</h4>`;
+
+    for (let i = 0; i < targetPlayer.hand.length; i++) {
+        const btn = document.createElement("button");
+        btn.innerText = `${i + 1}枚目の手札`;
+        btn.style.marginBottom = "6px";
+        btn.style.width = "100%";
+        btn.onclick = () => {
+            if (currentSelectedCard === 1) {
+                // 兵士の場合は続いて予測カード選択へ
+                selectGuessCard(targetPlayer.id, i);
+            } else {
+                executeCardPlay(myId, currentSelectedCard, { targetPlayerId: targetPlayer.id, handIndex: i });
+                document.getElementById("target-modal").style.display = "none";
+            }
+        };
+        tButtons.appendChild(btn);
+    }
+}
+
+// 🔄 予測カード選択（引数に handIndex を引き継ぐよう拡張）
+function selectGuessCard(targetPlayerId, handIndex) {
+    const tButtons = document.getElementById("target-buttons");
+    tButtons.innerHTML = `<h4>${handIndex + 1}枚目のカードに対する予測を宣言:</h4>`;
 
     for (let i = 2; i <= 8; i++) {
         const btn = document.createElement("button");
         btn.className = `btn-secondary`;
         btn.style.marginBottom = "5px";
+        btn.style.width = "100%";
         btn.innerText = `${i}: ${game.cardSettings[i].name}`;
         btn.onclick = () => {
-            executeCardPlay(myId, currentSelectedCard, { targetPlayerId: targetPlayerId, guessCardValue: i });
+            executeCardPlay(myId, currentSelectedCard, { 
+                targetPlayerId: targetPlayerId, 
+                guessCardValue: i,
+                handIndex: handIndex 
+            });
             document.getElementById("target-modal").style.display = "none";
         };
         tButtons.appendChild(btn);
