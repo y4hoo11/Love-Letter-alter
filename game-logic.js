@@ -15,7 +15,7 @@ export const game = {
         5: { name: "魔術師", count: 2, desc: "相手に手札を捨てさせてドローさせる" },
         6: { name: "将軍", count: 1, desc: "相手と手札を交換する" },
         7: { name: "大臣", count: 1, desc: "手札の合計が12以上なら脱落" },
-        8: { name: "魔王", count: 1, desc: "捨てたら脱落" }
+        8: { name: "女王", count: 1, desc: "捨てたら脱落" }
     },
     
     // ドロー枚数のデフォルト設定
