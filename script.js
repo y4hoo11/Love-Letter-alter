@@ -1,6 +1,6 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
- * オンライン P2P対応（人数無制限・ホスト作成後のカードカスタマイズ同期機能搭載）
+ * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
  * 全文表示・エラーレス結合版
  */
 
@@ -17,6 +17,12 @@ class LoveLetterCustomGame {
             6: { name: "大臣", value: 6, count: 1, desc: "手札に入った時点で、もう1枚との合計が12以上なら即脱落。" },
             7: { name: "公爵", value: 7, count: 1, desc: "効果なし。ただし、4(魔術師)か5(将軍)と同時に持つと強制廃棄。" },
             8: { name: "姫", value: 8, count: 1, desc: "このカードを捨てる、または捨てさせられた場合、即脱落。" }
+        };
+
+        // 🛑 ドロー枚数のカスタム設定用プロパティ（初期値：アークライト公式準拠）
+        this.drawSettings = {
+            firstTurnCount: 1, // 最初の手番で引く追加枚数 (配られた1枚 + 1枚 = 計2枚にする)
+            everyTurnCount: 1  // 毎ターンのドロー枚数
         };
 
         this.deck = [];
@@ -52,8 +58,8 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 必要枚数のチェック
-        const minRequired = playerList.length + (playerList.length < 4 ? 4 : 1);
+        // 必要枚数のチェック（ドローカスタムを考慮し、最低限各プレイヤーが最初に行動できる枚数）
+        const minRequired = playerList.length + this.drawSettings.firstTurnCount + (playerList.length < 4 ? 4 : 1);
         if (this.deck.length < minRequired) {
             this.log(`エラー: カードの総枚数(${this.deck.length}枚)が不足しています。枚数を増やしてください。`);
             return false;
@@ -71,7 +77,8 @@ class LoveLetterCustomGame {
                 alive: true,
                 protected: false,
                 history: [],
-                score: existing ? existing.score : 0
+                score: existing ? existing.score : 0,
+                isFirstTurn: true // 🛑 各ラウンドの最初のターン判定用
             };
         });
 
@@ -84,7 +91,7 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 初手配布
+        // 初手配布 (全員にまず1枚ずつ)
         for (let player of this.players) {
             player.hand.push(this.deck.pop());
             this.checkChancellorBurst(player);
@@ -106,10 +113,17 @@ class LoveLetterCustomGame {
 
         currentPlayer.protected = false; // 僧侶解除
 
-        if (this.deck.length > 0) {
-            const drawnCard = this.deck.pop();
-            currentPlayer.hand.push(drawnCard);
-            this.log(`👉 ${currentPlayer.name} の手番（山札残: ${this.deck.length}枚）`);
+        // 🛑 カスタム設定に基づいたドロー枚数の決定
+        const drawCount = currentPlayer.isFirstTurn ? this.drawSettings.firstTurnCount : this.drawSettings.everyTurnCount;
+        currentPlayer.isFirstTurn = false; // 最初のターンフラグを消化
+
+        if (this.deck.length >= drawCount) {
+            // 設定された枚数分カードを引く
+            for (let i = 0; i < drawCount; i++) {
+                const drawnCard = this.deck.pop();
+                currentPlayer.hand.push(drawnCard);
+            }
+            this.log(`👉 ${currentPlayer.name} の手番（${drawCount}枚ドロー / 山札残: ${this.deck.length}枚）`);
 
             // 大臣チェック
             if (this.checkChancellorBurst(currentPlayer)) {
@@ -118,6 +132,7 @@ class LoveLetterCustomGame {
                 return;
             }
         } else {
+            // ドロー枚数が足りない場合は山札切れでラウンド終了
             this.endRound();
             return;
         }
@@ -208,7 +223,9 @@ class LoveLetterCustomGame {
 
     checkChancellorBurst(player) {
         if (!player.alive || player.hand.length < 2) return false;
-        if ((player.hand[0] + player.hand[1]) >= 12) {
+        // 手札が複数枚ある場合の合計値をチェック
+        const totalSum = player.hand.reduce((a, b) => a + b, 0);
+        if (totalSum >= 12 && player.hand.includes(6)) {
             player.alive = false;
             while(player.hand.length > 0) {
                 player.history.push(player.hand.pop());
@@ -292,11 +309,11 @@ class LoveLetterCustomGame {
 const game = new LoveLetterCustomGame();
 let peer = null;
 let myId = "";
-let connections = []; // ホスト用：全接続クライアント
-let connToHost = null; // ゲスト用：ホストへの接続
+let connections = []; // ホスト用
+let connToHost = null; // ゲスト用
 let isHost = false; 
 let myPlayerName = "プレイヤー";
-let rawPlayerList = []; // 全参加者データ [{id, name}]
+let rawPlayerList = []; 
 
 function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
@@ -326,13 +343,10 @@ window.addEventListener('load', () => {
         });
     });
 
-    // 既存の「リセットボタン」のHTML記述を安全に抹消（エラー防止）
     const oldResetBtn = document.getElementById("reset-game-btn");
     if(oldResetBtn) oldResetBtn.remove();
 
-    // トラッカーの下に「ゲームを強制終了」するボタンを動的生成
     injectAbortButton();
-
     updateTrackerUI();
 });
 
@@ -345,7 +359,7 @@ document.getElementById("my-peer-id").addEventListener('click', () => {
 // HTML内の「親として部屋を作る」に対応
 function beHost() {
     myPlayerName = document.getElementById("name-input").value.trim() || "ホスト";
-    isHost = true; // 明示的に自身を絶対的ホストに指定
+    isHost = true; 
     rawPlayerList = [{ id: myId, name: myPlayerName }];
     
     document.getElementById("setup-container").style.display = "none";
@@ -371,9 +385,12 @@ function joinRoom() {
     connToHost = peer.connect(targetRoomId);
 
     connToHost.on('open', () => {
-        isHost = false; // クライアント（子）であることを絶対固定
+        isHost = false; 
         document.getElementById("setup-container").style.display = "none";
         document.getElementById("game-container").style.display = "block";
+        
+        // 🛑【追加】ゲスト側の画面ログに接続成功を明示
+        game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！ゲーム開始を待っています。`);
         
         connToHost.send({ type: "JOIN", name: myPlayerName, id: myId });
     });
@@ -391,7 +408,6 @@ function joinRoom() {
 // データの受送信ハンドラ
 function handleReceivedData(data, conn) {
     if (isHost) {
-        // --- 👑 ホストが受信する処理 ---
         if (data.type === "JOIN") {
             if (!rawPlayerList.some(p => p.id === data.id)) {
                 rawPlayerList.push({ id: data.id, name: data.name });
@@ -405,19 +421,13 @@ function handleReceivedData(data, conn) {
             broadcastState();
             updateUI();
         }
-        if (data.type === "UPDATE_COUNT") {
-            // 譲渡バグ対策：万が一ゲストから枚数変更が届いてもホスト側は一切無視
-            return;
-        }
     } else {
-        // --- 👥 ゲストが受信する処理 ---
         if (data.type === "SYNC") {
-            // ホストからのゲーム状態を完全上書き（同期）
             Object.assign(game, data.gameState);
             rawPlayerList = data.rawPlayerList;
             
-            // ゲスト画面にも設定UIがあるか確認し、無ければ生成、あれば数値を同期
-            syncGuestSettingsUI(data.gameState.cardSettings);
+            // ゲスト画面にカスタム初期枚数＆ドロー枚数設定枠をリアルタイム反映 (閲覧専用)
+            syncGuestSettingsUI(data.gameState.cardSettings, data.gameState.drawSettings);
             updateUI();
         }
     }
@@ -435,7 +445,8 @@ function broadcastState() {
             players: game.players,
             turnIndex: game.turnIndex,
             isGameStarted: game.isGameStarted,
-            cardSettings: game.cardSettings
+            cardSettings: game.cardSettings,
+            drawSettings: game.drawSettings // 🛑 ドロー枚数データも同期に含める
         },
         rawPlayerList: rawPlayerList
     };
@@ -448,13 +459,19 @@ function broadcastState() {
 function hostStartGame() {
     if (!isHost) return;
     
-    // 入力値の取得
+    // 入力値の取得（カード初期枚数）
     for (let i = 1; i <= 8; i++) {
         const inputEl = document.getElementById(`card-count-${i}`);
         if (inputEl) {
             game.updateCardCount(i, parseInt(inputEl.value) || 0);
         }
     }
+
+    // 🛑 入力値の取得（追加されたドロー枚数設定）
+    const firstDrawEl = document.getElementById("draw-count-first");
+    const everyDrawEl = document.getElementById("draw-count-every");
+    if(firstDrawEl) game.drawSettings.firstTurnCount = parseInt(firstDrawEl.value) || 1;
+    if(everyDrawEl) game.drawSettings.everyTurnCount = parseInt(everyDrawEl.value) || 1;
 
     const success = game.initRound(rawPlayerList);
     if (success) {
@@ -474,7 +491,6 @@ function hostNextRound() {
     hostStartGame();
 }
 
-// 🛑 今回追加：現在のゲームを終了(勝敗なし)するボタンの処理
 function hostAbortGame() {
     if (!isHost) return;
     if (!confirm("現在のゲームを勝敗なしで終了し、待機室に戻しますか？")) return;
@@ -490,7 +506,7 @@ function hostAbortGame() {
 
 // --- 🖥️ UI描画・DOM操作ロジック ---
 
-// 部屋を作った後にホスト専用の設定UIを組み込む
+// 部屋を作った後にホスト専用の設定UI（カード枚数＋ドロー枚数）を組み込む
 function injectCustomSettingsUIIntoGame() {
     const gameContainer = document.getElementById("game-container");
     const targetNode = document.getElementById("log-box");
@@ -500,70 +516,111 @@ function injectCustomSettingsUIIntoGame() {
     const wrapper = document.createElement("div");
     wrapper.className = "custom-card-settings";
     wrapper.id = "host-card-settings-area";
-    wrapper.innerHTML = `<h3>🃏 カード初期枚数のカスタム設定（ホスト専用）</h3>`;
-
+    
+    // 基本構造の流し込み
+    let htmlContent = `<h3>🃏 カスタムゲーム設定（ホスト専用）</h3>`;
+    
+    // 1. カード枚数の設定ループ
     for (const [val, config] of Object.entries(game.cardSettings)) {
-        const item = document.createElement("div");
-        item.className = "setting-item";
-        // ホスト用なので通常入力コントロール
-        item.innerHTML = `
-            <span class="setting-card-info">強さ${val}: ${config.name}</span>
-            <div class="setting-input-wrapper">
-                <input type="number" id="card-count-${val}" value="${config.count}" min="0" max="10" onchange="onHostChangeCount(${val}, this.value)"> 枚
+        htmlContent += `
+            <div class="setting-item">
+                <span class="setting-card-info">強さ${val}: ${config.name}</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="card-count-${val}" value="${config.count}" min="0" max="10" onchange="onHostChangeCount(${val}, this.value)"> 枚
+                </div>
             </div>
         `;
-        wrapper.appendChild(item);
     }
+
+    // 2. 🛑 ドロー枚数設定欄の追加
+    htmlContent += `
+        <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
+        <div class="setting-item">
+            <span class="setting-card-info">初手（最初の番）の追加ドロー枚数</span>
+            <div class="setting-input-wrapper">
+                <input type="number" id="draw-count-first" value="${game.drawSettings.firstTurnCount}" min="1" max="5" onchange="onHostChangeDraw('first', this.value)"> 枚
+            </div>
+        </div>
+        <div class="setting-item">
+            <span class="setting-card-info">毎ターン（2周目以降）のドロー枚数</span>
+            <div class="setting-input-wrapper">
+                <input type="number" id="draw-count-every" value="${game.drawSettings.everyTurnCount}" min="1" max="5" onchange="onHostChangeDraw('every', this.value)"> 枚
+            </div>
+        </div>
+    `;
+
+    wrapper.innerHTML = htmlContent;
     gameContainer.insertBefore(wrapper, targetNode);
 }
 
-// ホストが枚数値をいじった時にリアルタイムでゲストに同期をかけるフック
+// ホストが枚数値を変更した時のフック
 function onHostChangeCount(val, value) {
     if(!isHost) return;
     game.updateCardCount(val, parseInt(value) || 0);
     broadcastState();
 }
 
-// ゲスト側に閲覧専用（薄暗く、操作不可）の設定UIを生成＆同期させる関数
-function syncGuestSettingsUI(hostCardSettings) {
+// 🛑 ホストがドロー設定を変更した時のフック
+function onHostChangeDraw(type, value) {
+    if(!isHost) return;
+    if(type === 'first') game.drawSettings.firstTurnCount = parseInt(value) || 1;
+    if(type === 'every') game.drawSettings.everyTurnCount = parseInt(value) || 1;
+    broadcastState();
+}
+
+// ゲスト側に閲覧専用（薄暗く、操作不可）の設定UIを同期させる関数
+function syncGuestSettingsUI(hostCardSettings, hostDrawSettings) {
     const gameContainer = document.getElementById("game-container");
     const targetNode = document.getElementById("log-box");
     if (!gameContainer || !targetNode) return;
 
     let wrapper = document.getElementById("host-card-settings-area");
-    
-    // まだ設定枠自体が存在しない場合は作成
     if (!wrapper) {
         wrapper = document.createElement("div");
         wrapper.id = "host-card-settings-area";
         gameContainer.insertBefore(wrapper, targetNode);
     }
 
-    // ゲスト（視聴側）用のクラス・文言に固定
     wrapper.className = "custom-card-settings guest-view-only";
-    wrapper.innerHTML = `<h3>🃏 カード初期枚数の設定状況（ホストが設定中…）</h3>`;
+    
+    let htmlContent = `<h3>🃏 カスタムゲーム設定状況（ホストが設定中…）</h3>`;
 
+    // 1. カード枚数の閲覧同期
     for (let i = 1; i <= 8; i++) {
-        const config = hostCardSettings[i];
-        const item = document.createElement("div");
-        item.className = "setting-item";
-        // disabled属性を付与して完全に操作・フォーカスを拒否
-        item.innerHTML = `
-            <span class="setting-card-info">強さ${i}: ${config.name}</span>
-            <div class="setting-input-wrapper">
-                <input type="number" id="card-count-${i}" value="${config.count}" disabled> 枚
+        htmlContent += `
+            <div class="setting-item">
+                <span class="setting-card-info">強さ${i}: ${hostCardSettings[i].name}</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="card-count-${i}" value="${hostCardSettings[i].count}" disabled> 枚
+                </div>
             </div>
         `;
-        wrapper.appendChild(item);
     }
+
+    // 2. 🛑 ドロー枚数の閲覧同期
+    htmlContent += `
+        <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
+        <div class="setting-item">
+            <span class="setting-card-info">初手（最初の番）の追加ドロー枚数</span>
+            <div class="setting-input-wrapper">
+                <input type="number" id="draw-count-first" value="${hostDrawSettings.firstTurnCount}" disabled> 枚
+            </div>
+        </div>
+        <div class="setting-item">
+            <span class="setting-card-info">毎ターン（2周目以降）のドロー枚数</span>
+            <div class="setting-input-wrapper">
+                <input type="number" id="draw-count-every" value="${hostDrawSettings.everyTurnCount}" disabled> 枚
+            </div>
+        </div>
+    `;
+
+    wrapper.innerHTML = htmlContent;
 }
 
 // 全カード使用状況の下に「ゲーム終了」ボタンを配置する関数
 function injectAbortButton() {
     const trackerContainer = document.getElementById("card-tracker-container");
     if (!trackerContainer) return;
-
-    // 既に配置済みならスキップ
     if(document.getElementById("abort-game-btn")) return;
 
     const abortBtn = document.createElement("button");
@@ -571,10 +628,9 @@ function injectAbortButton() {
     abortBtn.innerText = "🛑 現在のゲームを終了 (勝敗なし)";
     abortBtn.style.background = "#d35400";
     abortBtn.style.marginTop = "15px";
-    abortBtn.style.display = "none"; // 初期状態は隠す
+    abortBtn.style.display = "none"; 
     abortBtn.onclick = hostAbortGame;
 
-    // トラッカー（container）の真後ろ、内部の下部に追加
     trackerContainer.appendChild(abortBtn);
 }
 
@@ -604,31 +660,27 @@ function updateUI() {
         roleDisplay.innerText = me.alive ? (me.protected ? "🛡️ 僧侶ガード中" : "🟢 生存") : "💀 脱落";
     }
 
-    // --- 👑 ホスト/ゲスト権限に基づくボタン表示制御（譲渡事故防止） ---
+    // ホスト/ゲスト権限に基づくボタン表示制御
     const abortBtn = document.getElementById("abort-game-btn");
     
     if (isHost) {
-        // ホストの場合
         if (!game.isGameStarted) {
             document.getElementById("start-game-btn").style.display = "block";
             document.getElementById("next-round-btn").style.display = (game.players.length > 0) ? "block" : "none";
-            if(abortBtn) abortBtn.style.display = "none"; // 開始前は終了ボタン不要
+            if(abortBtn) abortBtn.style.display = "none";
             
             const settingsArea = document.getElementById("host-card-settings-area");
             if (settingsArea) settingsArea.style.display = "block";
         } else {
-            // ゲーム中
             document.getElementById("start-game-btn").style.display = "none";
             document.getElementById("next-round-btn").style.display = "none";
-            if(abortBtn) abortBtn.style.display = "block"; // ゲーム中のみ終了ボタンを出現させる
+            if(abortBtn) abortBtn.style.display = "block"; 
         }
     } else {
-        // ゲスト（子）の場合はゲーム制御系、強制終了ボタンは絶対に不可視化
         document.getElementById("start-game-btn").style.display = "none";
         document.getElementById("next-round-btn").style.display = "none";
         if(abortBtn) abortBtn.style.display = "none";
 
-        // ゲスト側のカード設定欄の出し入れ設定
         const settingsArea = document.getElementById("host-card-settings-area");
         if (settingsArea) {
             settingsArea.style.display = !game.isGameStarted ? "block" : "none";
