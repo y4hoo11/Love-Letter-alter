@@ -1,25 +1,39 @@
 // network-manager.js
 import { game } from "./game-logic.js";
-import { updateUI } from "./ui-manager.js";
+import { updateUI, syncGuestSettingsUI } from "./ui-manager.js";
 
-// グローバル状態の参照・定義
-export let isHost = window.isHost || false;
-export let myId = window.myId || "player_me";
-export let myPlayerName = window.myPlayerName || "名無しプレイヤー";
-export let rawPlayerList = window.rawPlayerList || []; // 待機室用の簡易プレイヤーリスト
-export let connections = window.connections || [];     // ホストが持つ全ゲストへの接続オブジェクト配列
-export let connToHost = window.connToHost || null;       // ゲストが持つホストへの接続オブジェクト
+// 最初期のグローバル配列・変数の安全なセットアップ
+window.connections = window.connections || [];
+window.rawPlayerList = window.rawPlayerList || [];
 
-// 安全なデータ送信関数
+export let isHost = false;
+export let myId = "";
+export let myPlayerName = "";
+export let rawPlayerList = [];
+export let connections = [];
+export let connToHost = null;
+
+// script.jsから状態を同期するためのセッター
+export function setIsHost(val) { isHost = val; window.isHost = val; }
+export function setRawPlayerList(list) { rawPlayerList = list; window.rawPlayerList = list; }
+export function setConnections(conn) { connections.push(conn); window.connections.push(conn); }
+export function setConnToHost(conn) { connToHost = conn; window.connToHost = conn; }
+
 export function safeSend(conn, data) {
     if (conn && conn.open) {
         conn.send(JSON.stringify(data));
     }
 }
 
-// 状態のアニメーション、全同期（ホストから全員へ送信）
+// ホストから全員へ現在のゲーム状態をブロードキャスト
 export function broadcastState() {
-    if (!isHost) return;
+    // 常に最新のグローバル変数を参照
+    myId = window.myId;
+    rawPlayerList = window.rawPlayerList;
+    connections = window.connections;
+
+    if (!window.isHost) return;
+
     const statePayload = {
         type: "SYNC_STATE",
         gameStarted: game.isGameStarted,
@@ -33,10 +47,97 @@ export function broadcastState() {
     connections.forEach(c => safeSend(c, statePayload));
 }
 
+// ーーー 📩 データ受信ハンドラー ーーー
+
+// 1. ホスト側がゲストからデータを受け取った時
+export function handleHostReceiveData(conn, data) {
+    myId = window.myId;
+    rawPlayerList = window.rawPlayerList;
+    connections = window.connections;
+
+    if (data.type === "JOIN") {
+        // すでに登録済みか確認
+        if (!rawPlayerList.some(p => p.id === data.id)) {
+            rawPlayerList.push({
+                id: data.id,
+                name: data.name,
+                spectator: false,
+                score: 0
+            });
+            window.rawPlayerList = rawPlayerList;
+            game.log(`👥 ${data.name} が参加しました。`);
+        }
+        // 新しいメンバーを含めて全員に同期、UI更新
+        broadcastState();
+        updateUI();
+    } 
+    else if (data.type === "LEAVE") {
+        rawPlayerList = rawPlayerList.filter(p => p.id !== data.id);
+        window.rawPlayerList = rawPlayerList;
+        game.players = game.players.filter(p => p.id !== data.id);
+        game.log(`🚪 ${data.name} が退室しました。`);
+        broadcastState();
+        updateUI();
+    } 
+    else if (data.type === "ACTION") {
+        // ゲストからのカードプレイ要求を処理
+        game.playCard(data.playerId, data.cardValue, data.target);
+        broadcastState();
+        updateUI();
+    }
+}
+
+// 2. ゲスト側がホストからデータ（状態同期）を受け取った時
+export function handleGuestReceiveData(data) {
+    myId = window.myId;
+
+    if (data.type === "SYNC_STATE") {
+        // ホストのゲームデータとプレイヤー名簿を自身のローカルに同期
+        game.isGameStarted = data.gameStarted;
+        game.deck = { length: data.deckLength }; // ゲスト側は枚数だけ見えればOK
+        game.players = data.players;
+        game.turnIndex = data.turnIndex;
+        game.cardSettings = data.cardSettings;
+        game.drawSettings = data.drawSettings;
+        
+        window.rawPlayerList = data.rawPlayerList;
+        rawPlayerList = data.rawPlayerList;
+
+        // 設定エリアの同期
+        if (!game.isGameStarted) {
+            syncGuestSettingsUI(data.cardSettings, data.drawSettings);
+        }
+        updateUI();
+    } 
+    else if (data.type === "HOST_DISCONNECT") {
+        alert("ホストが離脱したため、部屋が解散されました。");
+        location.reload();
+    } 
+    else if (data.type === "KICKED") {
+        alert("ホストによってキックされました。");
+        location.reload();
+    } 
+    else if (data.type === "HOST_TRANSFER") {
+        if (myId === data.newHostId) {
+            alert("あなたが新しいホストに任命されました！");
+            window.isHost = true;
+            isHost = true;
+        } else {
+            game.log(`👑 ホスト権限が交代しました。`);
+        }
+        updateUI();
+    }
+}
+
 // 部屋から離脱する
 export function leaveRoom() {
+    myId = window.myId;
+    myPlayerName = window.myPlayerName;
+    connections = window.connections;
+    connToHost = window.connToHost;
+
     if (confirm("本当にこの部屋から離脱しますか？")) {
-        if (isHost) {
+        if (window.isHost) {
             if (confirm("あなたがホストです。離脱すると部屋全員が解散されます。よろしいですか？")) {
                 connections.forEach(c => safeSend(c, { type: "HOST_DISCONNECT" }));
                 setTimeout(() => location.reload(), 200);
@@ -50,32 +151,34 @@ export function leaveRoom() {
     }
 }
 
-// プレイヤーをキックする（ホスト専用）
+// プレイヤーをキックする
 export function hostKickPlayer(playerId) {
-    if (!isHost) return;
+    connections = window.connections;
+    rawPlayerList = window.rawPlayerList;
+
+    if (!window.isHost) return;
     if (confirm("本当にこのプレイヤーをキックしますか？")) {
-        // 通信切断処理や通知
         connections.forEach(c => {
-            if (c.peer === playerId || c.metadata?.id === playerId) {
+            if (c.peer === playerId) {
                 safeSend(c, { type: "KICKED" });
             }
         });
-        // リストから除外
         rawPlayerList = rawPlayerList.filter(p => p.id !== playerId);
+        window.rawPlayerList = rawPlayerList;
         game.players = game.players.filter(p => p.id !== playerId);
         broadcastState();
         updateUI();
     }
 }
 
-// ホスト権限を譲渡する（ホスト専用）
+// ホスト権限を譲渡する
 export function hostTransferAuthority(playerId) {
-    if (!isHost) return;
+    connections = window.connections;
+    if (!window.isHost) return;
     if (confirm("本当にこのプレイヤーにホスト権限を譲渡しますか？")) {
         connections.forEach(c => {
             safeSend(c, { type: "HOST_TRANSFER", newHostId: playerId });
         });
-        // 自身のローカル状態を変更してリロード
         alert("権限を譲渡しました。再読み込みします。");
         location.reload();
     }
