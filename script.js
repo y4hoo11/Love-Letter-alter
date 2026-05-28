@@ -1,7 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
- * ログ同期を配列データ管理に変更し、通信時の文字化けを完全に修正したバージョン
+ * JSONシリアライズにより PeerJS の ArrayBuffer 強制変換（文字化け）を完全に防ぐバージョン
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -31,8 +31,6 @@ class LoveLetterCustomGame {
         this.players = [];       // { id, name, hand:[], alive:true, protected:false, history:[], score:0 }
         this.turnIndex = 0;
         this.isGameStarted = false;
-        
-        // 🔄【文字化け対策】ログを文字列の配列として内部保持する
         this.logData = []; 
     }
 
@@ -304,14 +302,12 @@ class LoveLetterCustomGame {
     getAlivePlayers() { return this.players.filter(p => p.alive); }
     shuffle(a) { for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} }
     
-    // 🔄【修正】文字化けを防止するため、HTMLタグではなく純粋なテキスト配列として蓄積する
     log(msg) {
         this.logData.push(msg);
         renderLogBox(this.logData);
     }
 }
 
-// 🔄【追加】データ配列からログBOXの画面描画を行う共通処理
 function renderLogBox(logsArray) {
     const lb = document.getElementById("log-box");
     if (lb) {
@@ -334,6 +330,17 @@ function generateNumericRoomId() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
 }
 
+// 🔄【重要】送信データをJSONテキスト化して安全に送るためのラッパー関数
+function safeSend(conn, dataObj) {
+    if (conn && conn.open) {
+        try {
+            conn.send(JSON.stringify(dataObj));
+        } catch (e) {
+            console.error("送信エラー:", e);
+        }
+    }
+}
+
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
     peer = new Peer(myId, { debug: 1 });
@@ -353,8 +360,14 @@ window.addEventListener('load', () => {
             return;
         }
         connections.push(conn);
-        conn.on('data', (data) => {
-            handleReceivedData(data, conn);
+        conn.on('data', (rawMsg) => {
+            // 🔄【重要】受け取ったJSON文字列をオブジェクトに復元
+            try {
+                const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
+                handleReceivedData(data, conn);
+            } catch(e) {
+                console.error("データ解析失敗:", e);
+            }
         });
     });
 
@@ -403,11 +416,18 @@ function joinRoom() {
         
         game.log(`🟢 部屋 ${targetRoomId} との接続に成功しました！ゲーム開始を待っています。`);
         
-        connToHost.send({ type: "JOIN", name: myPlayerName, id: myId });
+        // 🔄 safeSendを使用して送信
+        safeSend(connToHost, { type: "JOIN", name: myPlayerName, id: myId });
     });
 
-    connToHost.on('data', (data) => {
-        handleReceivedData(data, null);
+    connToHost.on('data', (rawMsg) => {
+        // 🔄【重要】受け取ったJSON文字列をオブジェクトに復元
+        try {
+            const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
+            handleReceivedData(data, null);
+        } catch(e) {
+            console.error("データ解析失敗:", e);
+        }
     });
 
     connToHost.on('close', () => {
@@ -433,7 +453,6 @@ function handleReceivedData(data, conn) {
         }
     } else {
         if (data.type === "SYNC") {
-            // 🔄【修正】文字化け原因のHTML直送りを廃止し、安全な配列からログを再レンダリングする
             if (data.logData && Array.isArray(data.logData)) {
                 game.logData = data.logData;
                 renderLogBox(game.logData);
@@ -448,12 +467,11 @@ function handleReceivedData(data, conn) {
     }
 }
 
-// ホストから全員に現在の状況を配信 (ログ配列を添付して同期)
 function broadcastState() {
     if (!isHost) return;
     const syncData = {
         type: "SYNC",
-        logData: game.logData, // 🔄【修正】生HTML文字列ではなく、ピュアな配列データを送る
+        logData: game.logData, 
         gameState: {
             deck: game.deck,
             removedCard: game.removedCard,
@@ -466,8 +484,10 @@ function broadcastState() {
         },
         rawPlayerList: rawPlayerList
     };
+    
+    // 🔄 すべての接続先に safeSend で安全に一斉送信
     connections.forEach(c => {
-        if(c.open) c.send(syncData);
+        safeSend(c, syncData);
     });
 }
 
@@ -849,7 +869,8 @@ function executeCardPlay(playerId, cardValue, target) {
         broadcastState();
         updateUI();
     } else {
-        connToHost.send({
+        // 🔄 safeSendを使用して送信
+        safeSend(connToHost, {
             type: "ACTION",
             playerId: playerId,
             cardValue: cardValue,
