@@ -410,3 +410,22 @@ button:active {
     #card-tracker-list { grid-template-columns: repeat(3, 1fr); gap: 4px; } /* スマホは3列に */
     .tracker-item { font-size: 0.6rem; padding: 4px 1px; }
 }
+
+/* ゲスト（視聴・参加者側）の枚数カスタムUIのスタイル設定 */
+.custom-card-settings.guest-view-only {
+    background: #111a22;          /* ホスト側よりさらに暗い背景に */
+    opacity: 0.5;                 /* 全体を薄暗く（半透明）に */
+    pointer-events: none;         /* マウスクリック、スマホのタップ、選択を完全無効化 */
+    border: 1px dashed #7f8c8d;   /* 編集不可を表す点線枠に変更 */
+}
+
+.custom-card-settings.guest-view-only input[type="number"] {
+    background: #7f8c8d;          /* 入力欄の背景もグレーアウト */
+    color: #34495e;
+    cursor: not-allowed;          /* 禁止マークのカーソル */
+}
+
+/* 強制終了ボタンのホバーエフェクト */
+#abort-game-btn:hover {
+    background: #c0392b !important;
+}
