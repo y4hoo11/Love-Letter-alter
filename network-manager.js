@@ -9,6 +9,7 @@ export let connToHost = null;     // ゲスト用: ホストへのconn
 
 export function setIsHost(val) { 
     isHost = val; 
+    window.isHost = val; // グローバル同期
     if (isHost) {
         // 自分自身をrawPlayerList内でホスト扱いにマーク
         const me = rawPlayerList.find(p => p.id === window.myId);
@@ -78,14 +79,13 @@ export function handleHostReceiveData(conn, data) {
     }
 }
 
-// ゲストがデータを受信した時の処理
+// ゲストがデータを受信した時の処理 (課題5, 7完全対応)
 export function handleGuestReceiveData(data) {
     if (isHost) return;
 
     if (data.type === "SYNC_STATE") {
         game.isGameStarted = data.gameState.isGameStarted;
         game.deck = data.gameState.deck;
-        game.players = data.gameState.players;
         game.turnIndex = data.gameState.turnIndex;
         game.cardSettings = data.gameState.cardSettings;
         game.drawSettings = data.gameState.drawSettings;
@@ -93,23 +93,53 @@ export function handleGuestReceiveData(data) {
         // サーバ側（ホスト側）から同期されたリストをそのまま受け取る
         rawPlayerList = data.rawPlayerList;
 
+        // ゲーム内プレイヤー状態の復元（他人の手札の中身は隠蔽されたまま配列長さを維持）
+        if (data.gameState.players) {
+            game.players = data.gameState.players;
+        }
+
+        // ログの同期
+        if (data.gameState.logMessages) {
+            const logBox = document.getElementById("log-box");
+            if (logBox) {
+                logBox.innerHTML = "";
+                data.gameState.logMessages.forEach(msg => {
+                    const p = document.createElement("p");
+                    p.innerText = msg;
+                    logBox.appendChild(p);
+                });
+                logBox.scrollTop = logBox.scrollHeight;
+            }
+        }
+
+        // 課題5解決：自分宛ての魔術師の極秘のぞき見データがあれば、ポップアップUIを起動
+        if (data.secretView) {
+            if (typeof window.showSecretCardModal === "function") {
+                window.showSecretCardModal(data.secretView.targetName, data.secretView.cardValue);
+            }
+        }
+
         // 自分に👑ホスト権限が移ってきたかをチェック
         const myInfo = rawPlayerList.find(p => p.id === window.myId);
         if (myInfo && myInfo.isHost) {
             isHost = true;
+            window.isHost = true;
             game.log("👑 あなたが新しいホストになりました！");
+            if (typeof window.activateHostMode === "function") {
+                window.isHostMigrated = true; // 切断エラーによるリロードを防止
+                window.activateHostMode();   // ゲスト待ち受けを即時開始！
+            }
         }
 
         updateUI();
     }
 }
 
-// プレイヤー切断時の共通処理
+// プレイヤー切断時の共通処理（元の30行を完全復元・強化）
 function handlePlayerDisconnect(peerId) {
     const leftPlayer = rawPlayerList.find(p => p.id === peerId);
     if (!leftPlayer) return;
 
-    // 離脱したプレイヤーは「接続切れ」としてリストに隠蔽保持
     leftPlayer.disconnected = true;
     game.log(`🚪 ${leftPlayer.name} が退室（接続切れ）しました。`);
     
@@ -122,21 +152,27 @@ function handlePlayerDisconnect(peerId) {
             pInGame.alive = false;
             pInGame.hand = [];
         }
-        if (game.isGameEnded()) {
+        // 残り生存者が1人以下、または山札切れならラウンド終了
+        const alives = game.players.filter(p => p.alive && !p.spectator);
+        if (alives.length <= 1 || game.deck.length === 0) {
             game.endRound();
         }
     }
 
-    // ホストが切断された場合、残っている最も入室が早い（配列の先頭）プレイヤーに権限を移行
+    // ホストが切断された場合、残っている最も入室が早いプレイヤーに権限を移行
     if (leftPlayer.isHost) {
         leftPlayer.isHost = false;
-        // 接続が切れていないプレイヤーの中から選出
         const nextHost = rawPlayerList.find(p => !p.disconnected);
         if (nextHost) {
             nextHost.isHost = true;
             game.log(`👑 ホストが切断されたため、${nextHost.name} が新しいホストになりました。`);
             if (nextHost.id === window.myId) {
                 isHost = true;
+                window.isHost = true;
+                if (typeof window.activateHostMode === "function") {
+                    window.isHostMigrated = true;
+                    window.activateHostMode();
+                }
             }
         }
     }
@@ -145,28 +181,47 @@ function handlePlayerDisconnect(peerId) {
     updateUI();
 }
 
-// ホストから全ゲストへ状態をブロードキャスト
+// ホストから全ゲストへ状態をブロードキャスト（課題5, 6, 7対応版）
 export function broadcastState() {
     if (!isHost) return;
 
-    // タイポバグ（data.gameStateの不正参照）を修正完了
-    const payload = JSON.stringify({
-        type: "SYNC_STATE",
-        rawPlayerList: rawPlayerList, 
-        gameState: {
-            isGameStarted: game.isGameStarted,
-            deck: game.deck,
-            players: game.players,
-            turnIndex: game.turnIndex,
-            cardSettings: game.cardSettings,
-            drawSettings: game.drawSettings
-        }
-    });
-
     guestConnections.forEach(conn => {
-        if (conn.open) {
-            conn.send(payload);
+        if (!conn.open) return;
+
+        // 特定のプレイヤー宛てに魔術師データがあるかチェック（課題5対応）
+        let secretViewData = null;
+        const targetPlayerInGame = game.players.find(p => p.id === conn.peer);
+        if (targetPlayerInGame && targetPlayerInGame.pendingSecretView) {
+            secretViewData = targetPlayerInGame.pendingSecretView;
+            delete targetPlayerInGame.pendingSecretView; // 送信後に消去
         }
+
+        const payload = JSON.stringify({
+            type: "SYNC_STATE",
+            rawPlayerList: rawPlayerList, 
+            gameState: {
+                isGameStarted: game.isGameStarted,
+                deck: game.deck,
+                turnIndex: game.turnIndex,
+                cardSettings: game.cardSettings,
+                drawSettings: game.drawSettings,
+                logMessages: game.logMessages,
+                // セキュリティ保護：送信先プレイヤー本人以外の他人の手札の中身は「0」にして送る
+                players: game.players.map(p => ({
+                    id: p.id,
+                    name: p.name,
+                    alive: p.alive,
+                    protected: p.protected,
+                    history: p.history,
+                    spectator: p.spectator,
+                    score: p.score,
+                    hand: (p.id === conn.peer) ? p.hand : p.hand.map(() => 0)
+                }))
+            },
+            secretView: secretViewData // のぞき見データ
+        });
+
+        conn.send(payload);
     });
 }
 
@@ -187,7 +242,6 @@ export function hostRemoveDisconnectedPlayer(peerId) {
     if (target) {
         game.log(`🗑️ ${target.name} のデータがルームから完全に削除されました。`);
     }
-    // 配列から完全除外
     rawPlayerList = rawPlayerList.filter(p => p.id !== peerId);
     
     broadcastState();
@@ -200,12 +254,12 @@ export function hostTransferAuthority(peerId) {
     const target = rawPlayerList.find(p => p.id === peerId);
     if (!target || target.disconnected) return;
 
-    // 現ホストフラグを下ろし、ターゲットをホストに設定
     const currentHost = rawPlayerList.find(p => p.id === window.myId);
     if (currentHost) currentHost.isHost = false;
     
     target.isHost = true;
-    isHost = false; // 自身のホストフラグを解除
+    isHost = false; 
+    window.isHost = false;
     
     game.log(`👑 ホスト権限が ${target.name} に譲渡されました。`);
     broadcastState();
@@ -215,11 +269,10 @@ export function hostTransferAuthority(peerId) {
 // 部屋を離脱
 export function leaveRoom() {
     if (isHost) {
-        // ホスト自ら離脱する場合も次のプレイヤーに権限を委ねる
         const nextHost = rawPlayerList.find(p => p.id !== window.myId && !p.disconnected);
         if (nextHost) {
             nextHost.isHost = true;
-            broadcastState(); // 最後に全員に状態を送る
+            broadcastState(); 
         }
         guestConnections.forEach(conn => {
             if (conn.open) conn.close();

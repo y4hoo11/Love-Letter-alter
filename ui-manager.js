@@ -1,6 +1,7 @@
 // ui-manager.js
 import { game } from "./game-logic.js";
-import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority, hostRemoveDisconnectedPlayer } from "./network-manager.js";
+// 💡 不整合解決: connToHost を network-manager から直接インポート
+import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority, hostRemoveDisconnectedPlayer, connToHost } from "./network-manager.js";
 
 // ホスト用：ゲーム開始
 export function hostStartGame() {
@@ -25,13 +26,14 @@ export function hostNextRound() {
 
     const success = game.initRound(rawPlayerList);
     if (success) {
-        document.getElementById("next-round-btn").style.display = "none";
+        const nextBtn = document.getElementById("next-round-btn");
+        if (nextBtn) nextBtn.style.display = "none";
         broadcastState();
         updateUI();
     }
 }
 
-// 画面全体の再描画
+// 画面全体の再描画（ゲスト側にもこの更新が走り同期されます）
 export function updateUI() {
     const deckCountEl = document.getElementById("deck-count");
     if (deckCountEl) {
@@ -60,6 +62,12 @@ export function updateUI() {
         abortBtn.style.display = (isHost && game.isGameStarted) ? "block" : "none";
     }
 
+    // 💡 不整合解決: ホスト移行時に「次のラウンドへ」ボタンの表示権限も正常に引き継ぐ
+    const nextRoundBtn = document.getElementById("next-round-btn");
+    if (nextRoundBtn) {
+        nextRoundBtn.style.display = (isHost && game.isGameStarted && game.isGameEnded && game.isGameEnded()) ? "block" : "none";
+    }
+
     renderPlayerList();
     renderMyHand();
     renderTracker();
@@ -76,7 +84,6 @@ function renderPlayerList() {
         const item = document.createElement("div");
         item.className = "player-item";
         
-        // 接続切れ表示（視覚的に薄暗くする）
         if (p.disconnected) {
             item.classList.add("eliminated");
         }
@@ -103,12 +110,11 @@ function renderPlayerList() {
         nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
         header.appendChild(nameSpan);
 
-        // ホスト用操作ボタンの制御
+        // 操作対象が「自分自身以外」の時だけキック・譲渡ボタンを表示するガード
         if (isHost && p.id !== window.myId) {
             const btnGroup = document.createElement("div");
             
             if (p.disconnected) {
-                // 接続切れプレイヤーに対して「表示ごと完全に削除」するボタン
                 const removeBtn = document.createElement("button");
                 removeBtn.className = "btn-danger";
                 removeBtn.innerText = "完全に削除";
@@ -116,7 +122,6 @@ function renderPlayerList() {
                 removeBtn.onclick = () => hostRemoveDisconnectedPlayer(p.id);
                 btnGroup.appendChild(removeBtn);
             } else {
-                // 通常のアクティブプレイヤーに対する操作ボタン
                 const kickBtn = document.createElement("button");
                 kickBtn.className = "btn-danger";
                 kickBtn.innerText = "キック";
@@ -144,6 +149,8 @@ function renderPlayerList() {
                 const handContainer = document.createElement("div");
                 handContainer.className = "enemy-hand-container";
                 handContainer.style.marginTop = "5px";
+                handContainer.style.display = "flex";
+                handContainer.style.gap = "5px";
 
                 pInGame.hand.forEach((cardVal, index) => {
                     const cardBack = document.createElement("div");
@@ -179,7 +186,7 @@ function renderPlayerList() {
             const historyEl = document.createElement("div");
             historyEl.className = "played-history";
             pInGame.history.forEach(val => {
-                const info = game.cardSettings[val] || { name: "?", desc: "" };
+                const info = game.cardSettings?.[val] || game.defaultCardSettings?.[val] || { name: `カード${val}`, desc: "カスタム効果カード" };
                 const badge = document.createElement("div");
                 badge.className = `history-card card-${val}`;
                 badge.title = `【${val}: ${info.name}】\n${info.desc}`;
@@ -198,8 +205,9 @@ function renderPlayerList() {
     });
 }
 
-// 自分の手札をレンダリング
-function renderMyHand() {
+// 💡 不整合解決: 外部連携用の export キーワードを復元
+// 自分の手札をレンダリング（ゲームスタート時に即座に手札を描画させ同期ズレを完全に防ぐ）
+export function renderMyHand() {
     const cardArea = document.getElementById("card-area");
     const handTitle = document.getElementById("hand-title");
     if (!cardArea) return;
@@ -228,7 +236,7 @@ function renderMyHand() {
     const isMyTurn = currentTurnPlayer && currentTurnPlayer.id === window.myId;
 
     me.hand.forEach((val, index) => {
-        const info = game.cardSettings[val] || { name: "??", desc: "" };
+        const info = game.cardSettings?.[val] || game.defaultCardSettings?.[val] || { name: `カード${val}`, desc: "カスタム効果カード" };
         const card = document.createElement("div");
         card.className = `card card-${val}`;
         card.title = info.desc;
@@ -237,16 +245,18 @@ function renderMyHand() {
         const originText = isInitialHand ? "★初手" : "📥ドロー";
 
         card.innerHTML = `
-            <div style="font-size:0.65rem; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:10px; color:#fff;">${originText}</div>
-            <div class="card-num">${val}</div>
-            <div class="card-name">${info.name}</div>
+            <div style="font-size:0.65rem; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:10px; color:#fff; display:inline-block;">${originText}</div>
+            <div class="card-num" style="font-size: 1.8rem; font-weight: bold; text-align: center; margin: 5px 0;">${val}</div>
+            <div class="card-name" style="text-align: center; font-weight: bold;">${info.name}</div>
         `;
 
         if (isMyTurn) {
             card.onclick = () => selectPlayTarget(val);
+            card.style.cursor = "pointer";
+            card.style.opacity = "1.0";
         } else {
             card.style.cursor = "not-allowed";
-            card.style.opacity = "0.8";
+            card.style.opacity = "0.6";
         }
 
         cardArea.appendChild(card);
@@ -264,7 +274,8 @@ function selectPlayTarget(cardValue) {
     const container = document.getElementById("target-buttons");
     if (!modal || !container) return;
 
-    container.innerHTML = `<h4>「${game.cardSettings[cardValue].name}」の対象を選択</h4>`;
+    const currentInfo = game.cardSettings?.[cardValue] || { name: "カード" };
+    container.innerHTML = `<h4>「${currentInfo.name}」の対象プレイヤーを選択</h4>`;
     const targets = game.players.filter(p => p.alive && !p.spectator && p.id !== window.myId);
 
     if (targets.length === 0) {
@@ -280,11 +291,17 @@ function selectPlayTarget(cardValue) {
             const btn = document.createElement("button");
             btn.innerText = `${t.name} ${t.protected ? "(🛡️保護中)" : ""}`;
             btn.onclick = () => {
-                if (cardValue === 1) {
-                    selectGuessValue(cardValue, t.id);
+                // 複数枚所持ルールに対応。相手の手札が2枚以上あれば、どの位置のカードを狙うか選択させる
+                if (t.hand && t.hand.length > 1) {
+                    selectTargetCardSlot(cardValue, t.id, t.hand.length);
                 } else {
-                    modal.style.display = "none";
-                    executePlayCard(cardValue, { targetPlayerId: t.id });
+                    // 手札が1枚だけならスロット0番を自動指定
+                    if (cardValue === 1) {
+                        selectGuessValue(cardValue, t.id, 0);
+                    } else {
+                        modal.style.display = "none";
+                        executePlayCard(cardValue, { targetPlayerId: t.id, targetCardIndex: 0 });
+                    }
                 }
             };
             container.appendChild(btn);
@@ -300,22 +317,81 @@ function selectPlayTarget(cardValue) {
     modal.style.display = "flex";
 }
 
-// 兵士用：数字選択
-function selectGuessValue(cardValue, targetPlayerId) {
+// 相手が複数枚持っている場合に「何枚目のカードを対象にするか」を選ばせるUI
+function selectTargetCardSlot(cardValue, targetPlayerId, handSize) {
     const container = document.getElementById("target-buttons");
     if (!container) return;
-    container.innerHTML = `<h4>予想するカードを選択</h4>`;
+    container.innerHTML = `<h4>対象の手札を1枚選択してください</h4><p style="font-size:0.8rem; color:#bdc3c7;">相手は手札を ${handSize} 枚持っています</p>`;
 
-    for (let i = 2; i <= 8; i++) {
+    for (let i = 0; i < handSize; i++) {
         const btn = document.createElement("button");
-        btn.innerText = `${i}: ${game.cardSettings[i]?.name || ''}`;
+        btn.innerText = `${i + 1}枚目の手札を対象にする`;
         btn.onclick = () => {
-            document.getElementById("target-modal").style.display = "none";
-            executePlayCard(cardValue, { targetPlayerId: targetPlayerId, guessCardValue: i });
+            if (cardValue === 1) {
+                selectGuessValue(cardValue, targetPlayerId, i);
+            } else {
+                document.getElementById("target-modal").style.display = "none";
+                executePlayCard(cardValue, { targetPlayerId: targetPlayerId, targetCardIndex: i });
+            }
         };
         container.appendChild(btn);
     }
 }
+
+// 兵士用：数字選択（選択した手札インデックスを引き継ぐ）
+function selectGuessValue(cardValue, targetPlayerId, targetCardIndex) {
+    const container = document.getElementById("target-buttons");
+    if (!container) return;
+    container.innerHTML = `<h4>予想するカード数字を選択</h4>`;
+
+    for (let i = 2; i <= 8; i++) {
+        const btn = document.createElement("button");
+        const info = game.cardSettings?.[i] || { name: "" };
+        btn.innerText = `${i}: ${info.name}`;
+        btn.onclick = () => {
+            document.getElementById("target-modal").style.display = "none";
+            executePlayCard(cardValue, { 
+                targetPlayerId: targetPlayerId, 
+                guessCardValue: i,
+                targetCardIndex: targetCardIndex 
+            });
+        };
+        container.appendChild(btn);
+    }
+}
+
+// 見た人にだけゲーム内UIとしてカード内容を綺麗にポップアップ表示し、ログにも記録する関数
+export function showSecretCardModal(targetName, cardValue) {
+    const modal = document.getElementById("target-modal");
+    const container = document.getElementById("target-buttons");
+    if (!modal || !container) return;
+
+    const info = game.cardSettings?.[cardValue] || game.defaultCardSettings?.[cardValue] || { name: "未知のカード", desc: "" };
+    
+    container.innerHTML = `
+        <h3 style="color:#f1c40f; margin-bottom:15px;">🔍 カードののぞき見に成功！</h3>
+        <p style="font-size:0.9rem;">${targetName} の手札を確認しました：</p>
+        <div class="card card-${cardValue}" style="margin: 15px auto; pointer-events:none; float:none; display:block;">
+            <div class="card-num" style="font-size:2rem; font-weight:bold; text-align:center;">${cardValue}</div>
+            <div class="card-name" style="text-align:center; font-weight:bold;">${info.name}</div>
+        </div>
+        <p style="font-size:0.8rem; background:rgba(0,0,0,0.3); padding:8px; border-radius:4px; max-width:280px; text-align:left; margin:10px auto;">
+            <strong>効果:</strong> ${info.desc}
+        </p>
+    `;
+
+    const closeBtn = document.createElement("button");
+    closeBtn.innerText = "確認しました（閉じる）";
+    closeBtn.style.marginTop = "10px";
+    closeBtn.onclick = () => { modal.style.display = "none"; };
+    container.appendChild(closeBtn);
+
+    modal.style.display = "flex";
+
+    // 見た人本人だけのログボックスにシステムログとして情報を追記して残す
+    game.log(`👁️ [あなた限定ログ] ${targetName} の手札は「${cardValue}: ${info.name}」でした。`);
+}
+window.showSecretCardModal = showSecretCardModal;
 
 function executePlayCard(cardValue, target) {
     if (isHost) {
@@ -323,8 +399,9 @@ function executePlayCard(cardValue, target) {
         broadcastState();
         updateUI();
     } else {
-        if (window.connToHost && window.connToHost.open) {
-            window.connToHost.send(JSON.stringify({
+        // 💡 不整合解決: window.connToHost ではなく、インポートしたモジュールローカルの connToHost を参照
+        if (connToHost && connToHost.open) {
+            connToHost.send(JSON.stringify({
                 type: "ACTION",
                 playerId: window.myId,
                 cardValue: cardValue,
@@ -334,13 +411,12 @@ function executePlayCard(cardValue, target) {
     }
 }
 
-// トラッカーレンダリング（縦並びから綺麗に折り返す横並び「inline-block型」へ大改修）
+// トラッカーレンダリング
 function renderTracker() {
     const listEl = document.getElementById("card-tracker-list");
     if (!listEl) return;
     listEl.innerHTML = "";
 
-    // 親コンテナのスタイルを強力に固定して横並び・中央寄せ・折り返しを強制
     listEl.style.display = "block";
     listEl.style.textAlign = "center";
     listEl.style.width = "100%";
@@ -348,7 +424,7 @@ function renderTracker() {
     listEl.style.boxSizing = "border-box";
 
     const baseCounts = {};
-    for (const [val, config] of Object.entries(game.cardSettings)) {
+    for (const [val, config] of Object.entries(game.cardSettings || {})) {
         baseCounts[val] = config.count;
     }
 
@@ -364,46 +440,46 @@ function renderTracker() {
     const circledNumbers = { 1:"①", 2:"②", 3:"③", 4:"④", 5:"⑤", 6:"⑥", 7:"⑦", 8:"⑧" };
 
     for (let i = 1; i <= 8; i++) {
-        const total = baseCounts[i] || 0;
+        const total = baseCounts[i] !== undefined ? baseCounts[i] : 0;
         const used = usedCounts[i] || 0;
         const remain = Math.max(0, total - used);
-        const info = game.cardSettings[i] || { name: "", desc: "" };
+        
+        const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: "カスタムカード", desc: "カード効果の説明" };
 
         for (let k = 0; k < total; k++) {
             const badge = document.createElement("div");
             const isUsed = k >= remain;
 
-            // クラス名を付与
             badge.className = `tracker-item tracker-${i}`;
             
-            // display: inline-block を使い、Flexboxの不具合を回避して100%横並びを実現
-            badge.style.display = "inline-block";
+            badge.style.display = "inline-flex";
+            badge.style.justifyContent = "center";
+            badge.style.alignItems = "center";
             badge.style.width = "34px";
             badge.style.height = "34px";
-            badge.style.lineHeight = "34px"; // 文字を完全に上下中央に配置
-            badge.style.textAlign = "center";
             badge.style.margin = "4px";
             badge.style.borderRadius = "50%";
             badge.style.fontSize = "1.3rem";
             badge.style.fontWeight = "bold";
             badge.style.cursor = "help";
+            badge.style.overflow = "hidden";
+            badge.style.whiteSpace = "nowrap";
             
-            // ツールチップ用title属性（テキストの混入・破壊を防ぐためHTML構造には埋め込まない）
+            badge.innerText = circledNumbers[i];
+            
             badge.title = `【${i}: ${info.name}】\n${info.desc}`;
 
-            // 使用済み（脱落カード）の半透明グレーダウン
             if (isUsed) {
                 badge.style.background = "#2c3e50";
                 badge.style.color = "#7f8c8d";
                 badge.style.opacity = "0.25";
                 badge.style.border = "1px dashed #7f8c8d";
             } else {
-                // 生きているカードの文字色補正（視認性向上）
                 badge.style.color = "#ffffff";
-                badge.style.textShadow = "1px 1px 2px rgba(0,0,0,0.6)";
+                const colors = { 1:"#2ecc71", 2:"#3498db", 3:"#9b59b6", 4:"#e67e22", 5:"#1abc9c", 6:"#e67e22", 7:"#95a5a6", 8:"#f1c40f" };
+                badge.style.background = colors[i] || "#34495e";
             }
 
-            badge.innerText = circledNumbers[i];
             listEl.appendChild(badge);
         }
     }
@@ -440,37 +516,38 @@ export function renderCustomSettingsUI() {
     const disabledAttr = isHost ? "" : "disabled";
 
     let html = `<h3>${titleText}</h3>`;
-    html += `
-        <h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>
-    `;
+    html += `<h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
 
-    // 1番から8番（女王）までの入力欄
     for (let i = 1; i <= 8; i++) {
+        const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: `カード${i}` };
+        const countVal = game.cardSettings?.[i]?.count !== undefined ? game.cardSettings[i].count : 1;
         html += `
             <div class="setting-item">
-                <span class="setting-card-info">${i}番 ${game.cardSettings[i].name}</span>
+                <span class="setting-card-info">${i}番 ${info.name}</span>
                 <div class="setting-input-wrapper">
                     <label>枚数:</label>
-                    <input type="number" id="cfg-count-${i}" value="${game.cardSettings[i].count}" min="0" max="10" ${disabledAttr}>
+                    <input type="number" id="cfg-count-${i}" value="${countVal}" min="0" max="10" ${disabledAttr}>
                 </div>
             </div>
         `;
     }
 
-    // 8番 女王の枚数設定のすぐ下（カスタムブロックの最下部）に配置
+    const firstDrawVal = game.drawSettings?.firstTurnCount !== undefined ? game.drawSettings.firstTurnCount : 1;
+    const everyDrawVal = game.drawSettings?.everyTurnCount !== undefined ? game.drawSettings.everyTurnCount : 1;
+
     html += `
         <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid #f1c40f;">
             <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>
             <div class="setting-item">
                 <span>最初の手札枚数:</span>
                 <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-first-draw" value="${game.drawSettings.firstTurnCount}" min="1" max="5" ${disabledAttr}>
+                    <input type="number" id="cfg-first-draw" value="${firstDrawVal}" min="1" max="5" ${disabledAttr}>
                 </div>
             </div>
             <div class="setting-item">
                 <span>毎ターンのドロー枚数:</span>
                 <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-every-draw" value="${game.drawSettings.everyTurnCount}" min="1" max="3" ${disabledAttr}>
+                    <input type="number" id="cfg-every-draw" value="${everyDrawVal}" min="1" max="3" ${disabledAttr}>
                 </div>
             </div>
         </div>
@@ -480,12 +557,14 @@ export function renderCustomSettingsUI() {
 
     if (isHost) {
         document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
+            if(!game.drawSettings) game.drawSettings = {};
             game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);
             broadcastState();
             updateUI();
         });
 
         document.getElementById("cfg-every-draw")?.addEventListener("change", (e) => {
+            if(!game.drawSettings) game.drawSettings = {};
             game.drawSettings.everyTurnCount = Math.max(1, parseInt(e.target.value) || 1);
             broadcastState();
             updateUI();
@@ -493,6 +572,7 @@ export function renderCustomSettingsUI() {
 
         for (let i = 1; i <= 8; i++) {
             document.getElementById(`cfg-count-${i}`)?.addEventListener("change", (e) => {
+                if(!game.cardSettings[i]) game.cardSettings[i] = {};
                 game.cardSettings[i].count = Math.max(0, parseInt(e.target.value) || 0);
                 broadcastState();
                 updateUI();
@@ -501,7 +581,6 @@ export function renderCustomSettingsUI() {
     }
 }
 
-// 旧互換維持用ダミー
 export function syncGuestSettingsUI(cardSettings, drawSettings) {}
 export function injectCustomSettingsUIIntoGame() {}
 

@@ -1,305 +1,344 @@
 // game-logic.js
 
-export const game = {
-    isGameStarted: false,
-    deck: [],
-    players: [], 
-    turnIndex: 0,
-    
-    cardSettings: {
-        1: { name: "兵士", count: 5, desc: "指名した相手の1枚の手札を予想。当たれば脱落。" },
-        2: { name: "道化", count: 2, desc: "指名した相手の手札をこっそり見る。" },
-        3: { name: "騎士", count: 2, desc: "指名した相手と手札を比較。低い方が脱落。" },
-        4: { name: "僧侶", count: 2, desc: "次の自分の手番まで、他者からの効果を受けない。" },
-        5: { name: "魔術師", count: 2, desc: "指名した相手の手札を強制的に捨てさせ、山札から引かせる。" },
-        6: { name: "将軍", count: 1, desc: "指名した相手と自分の手札をそっくり交換する。" },
-        7: { name: "大臣", count: 1, desc: "手札に加わった時点で、合計値が12以上なら即脱落。" },
-        8: { name: "女王", count: 1, desc: "このカードを何らかの理由で捨て札にしたら脱落。" }
-    },
-    
-    // 👑 カスタマイズ可能なドロー初期値
-    drawSettings: {
-        firstTurnCount: 1,
-        everyTurnCount: 1
-    },
-
-    // ラウンドの開始処理（バリデーション機能付き）
-    initRound(rawPlayerList) {
+class GameLogic {
+    constructor() {
+        this.isGameStarted = false;
         this.deck = [];
-        let totalCards = 0;
+        this.players = []; // { id, name, hand:[], alive:true, protected:false, history:[], spectator:false, score:0 }
+        this.turnIndex = 0;
+        this.logMessages = [];
 
-        // 設定された構成枚数からデッキを再計算
-        for (const [val, config] of Object.entries(this.cardSettings)) {
-            const count = Math.max(0, config.count);
-            totalCards += count;
-            for (let i = 0; i < count; i++) {
-                this.deck.push(parseInt(val));
-            }
-        }
+        // 課題2解決：UI側からいつでも安全にデフォルトのテキストを引っ張れるように定義
+        this.defaultCardSettings = {
+            1: { name: "兵士", count: 5, desc: "自分以外のプレイヤー1人とその手札（スロット）を指定し、カードの数字を予想する。当たればそのプレイヤーは脱落する。" },
+            2: { name: "魔術師", count: 2, desc: "自分以外のプレイヤー1人を指定する。そのプレイヤーの選んだ手札をのぞき見ることができる。" },
+            3: { name: "僧侶", count: 2, desc: "自分以外のプレイヤー1人と手札を比較する。数字が小さい方が脱落する。" },
+            4: { name: "乙女", count: 2, desc: "次の自分のターンが回ってくるまで、自分に対するカードの効果をすべて無効化（保護）する。" },
+            5: { name: "高官", count: 2, desc: "自分以外のプレイヤー1人を指定する。そのプレイヤーは指定された手札を強制的に捨て、山札から1枚ドローする。" },
+            6: { name: "将軍", count: 1, desc: "自分以外のプレイヤー1人を指定する。お互いの手札（選択したスロット）を交換する。" },
+            7: { name: "賢者", count: 1, desc: "このカードは効果を持たない。手札にあるだけで、特定の状況下で捨てなければならない場合がある。" },
+            8: { name: "女王", count: 1, desc: "このカードを捨てた（あるいは捨てさせられた）プレイヤーは、その時点で即座にゲームに敗北（脱落）する。" }
+        };
+
+        // カスタム設定用（初期値はデフォルトをコピー）
+        this.cardSettings = JSON.parse(JSON.stringify(this.defaultCardSettings));
+
+        // 課題4対応：デフォルト設定の初期値
+        this.drawSettings = {
+            firstTurnCount: 1, // 最初の手札枚数
+            everyTurnCount: 1  // 毎ターンのドロー枚数
+        };
+    }
+
+    // ログ記録
+    log(msg) {
+        this.logMessages.push(msg);
+        console.log(`[GAME LOG] ${msg}`);
         
-        this.players = rawPlayerList.map(p => ({
+        // 画面のログボックスがあればリアルタイム追加
+        const logBox = document.getElementById("log-box");
+        if (logBox) {
+            const p = document.createElement("p");
+            p.innerText = msg;
+            logBox.appendChild(p);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
+
+    // ラウンド初期化 (ゲーム開始)
+    initRound(rawList) {
+        this.logMessages = [];
+        const logBox = document.getElementById("log-box");
+        if (logBox) logBox.innerHTML = "";
+
+        // 参加プレイヤーの構築
+        this.players = rawList.map(p => ({
             id: p.id,
             name: p.name,
             hand: [],
-            alive: !p.spectator,
-            spectator: p.spectator || false,
-            score: p.score || 0,
+            alive: true,
+            protected: false,
             history: [],
-            protected: false
+            spectator: p.spectator || false,
+            score: p.score || 0
         }));
 
         const activePlayers = this.players.filter(p => !p.spectator);
         if (activePlayers.length < 2) {
-            this.log("⚠️ プレイヤーが2名以上必要です（観戦者除く）。");
+            this.log("⚠ エラー: ゲームを開始するには、観戦者以外に2人以上のプレイヤーが必要です。");
             return false;
         }
 
-        // 🔥 【検証】開始時必要枚数 = (初手枚数 × アクティブ人数) + ターン用最低1枚
-        const requiredCards = activePlayers.length * this.drawSettings.firstTurnCount;
-        if (totalCards < requiredCards + 1) {
-            alert(`🚫 ゲームを開始できません！\n現在のカスタム設定では、初期手札として合計 ${requiredCards} 枚必要ですが、山札の総数が ${totalCards} 枚しかありません。カード枚数を増やすか設定を調整してください。`);
-            this.log(`❌ エラー: カード総数不足 (${totalCards}/${requiredCards + 1}枚)。ゲームをキャンセルしました。`);
-            return false;
+        // デッキ（山札）の作成
+        this.deck = [];
+        for (let i = 1; i <= 8; i++) {
+            const count = this.cardSettings[i]?.count ?? this.defaultCardSettings[i].count;
+            for (let c = 0; c < count; c++) {
+                this.deck.push(i);
+            }
         }
-        
-        // フィッシャー〜イェーツのシャッフル
+
+        // シャッフル
         for (let i = this.deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
         }
 
-        // 決定された初期枚数分配布
-        for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
-            activePlayers.forEach(p => {
-                if (this.deck.length > 0) p.hand.push(this.deck.pop());
-            });
+        // 転がし（ルール上、山札から1枚ゲーム外に除外する）
+        if (this.deck.length > 0) {
+            this.deck.pop();
         }
+
+        // 課題4対応：配布枚数カスタム設定に基づき最初の手札を配る
+        const initialCount = this.drawSettings.firstTurnCount || 1;
+        this.log(`🎮 ゲーム開始! [初手: ${initialCount}枚 / ターンドロー: ${this.drawSettings.everyTurnCount || 1}枚]`);
+
+        activePlayers.forEach(p => {
+            for (let i = 0; i < initialCount; i++) {
+                if (this.deck.length > 0) {
+                    p.hand.push(this.deck.pop());
+                }
+            }
+        });
 
         this.isGameStarted = true;
-        this.turnIndex = 0;
-        this.log(`🎮 ゲーム開始! [初手: ${this.drawSettings.firstTurnCount}枚 / ターンドロー: ${this.drawSettings.everyTurnCount}枚]`);
+        // ランダムに最初のターンを決定
+        this.turnIndex = this.players.findIndex(p => p.id === activePlayers[Math.floor(Math.random() * activePlayers.length)].id);
         
-        // 大臣(7)の初期バースト検証
-        activePlayers.forEach(p => this.checkChancellorBurst(p));
-
+        // 最初のプレイヤーのドロー処理
         this.startTurn();
         return true;
-    },
+    }
 
-    // 手番開始
+    // ターンの開始処理
     startTurn() {
-        if (!this.isGameStarted) return;
-
-        const currentPlayer = this.players[this.turnIndex];
-        if (!currentPlayer || !currentPlayer.alive || currentPlayer.spectator) {
+        const p = this.players[this.turnIndex];
+        if (!p || !p.alive || p.spectator) {
             this.nextTurn();
             return;
         }
-        
-        currentPlayer.protected = false; 
-        this.log(`🎲 ${currentPlayer.name} のターンです。`);
 
-        // 設定された毎ターンドロー枚数分引く
-        for (let i = 0; i < this.drawSettings.everyTurnCount; i++) {
+        p.protected = false; // 自分のターンが来たら乙女の無敵バリア解除
+        
+        // 課題4対応：毎ターンのドロー枚数カスタム設定に基づいてドロー
+        const drawCount = this.drawSettings.everyTurnCount || 1;
+        for (let i = 0; i < drawCount; i++) {
             if (this.deck.length > 0) {
-                const drawn = this.deck.pop();
-                currentPlayer.hand.push(drawn);
-                
-                if (this.checkChancellorBurst(currentPlayer)) return;
+                p.hand.push(this.deck.pop());
             }
         }
-    },
 
+        this.log(`🎲 ${p.name} のターンです。`);
+    }
+
+    // 次のターンへ
     nextTurn() {
-        if (this.isGameEnded()) {
+        // 生存チェック
+        const alives = this.players.filter(p => p.alive && !p.spectator);
+        if (alives.length <= 1 || this.deck.length === 0) {
             this.endRound();
             return;
         }
 
-        let loop = 0;
+        // 次の生存者へインデックスを回す
         do {
             this.turnIndex = (this.turnIndex + 1) % this.players.length;
-            loop++;
-        } while ((!this.players[this.turnIndex].alive || this.players[this.turnIndex].spectator) && loop < this.players.length);
+        } while (!this.players[this.turnIndex].alive || this.players[this.turnIndex].spectator);
 
-        if (this.isGameEnded()) {
-            this.endRound();
-        } else {
-            this.startTurn();
-        }
-    },
+        this.startTurn();
+    }
 
+    // カードのプレイロジック
+    // target = { targetPlayerId, guessCardValue, targetCardIndex }
     playCard(playerId, cardValue, target) {
-        const player = this.players.find(p => p.id === playerId);
-        if (!player) return;
+        const p = this.players.find(pl => pl.id === playerId);
+        if (!p) return;
 
-        const cardIdx = player.hand.indexOf(cardValue);
-        if (cardIdx !== -1) player.hand.splice(cardIdx, 1);
-        player.history.push(cardValue);
+        // 手札からそのカードを1枚取り除く
+        const cardIdx = p.hand.indexOf(cardValue);
+        if (cardIdx !== -1) {
+            p.hand.splice(cardIdx, 1);
+        }
+        p.history.push(cardValue);
 
-        this.log(`🃏 ${player.name} が「${this.cardSettings[cardValue].name}(${cardValue})」を出しました。`);
+        const cardName = this.cardSettings[cardValue]?.name || `カード${cardValue}`;
+        this.log(`📢 ${p.name} が「${cardValue}: ${cardName}」を発動しました。`);
 
+        // 女王を自分から捨てたら自爆脱落
         if (cardValue === 8) {
-            this.log(`💥 女王を捨てたため、${player.name} は脱落しました。`);
-            this.eliminatePlayer(player);
+            p.alive = false;
+            p.hand = [];
+            this.log(`💥 ${p.name} は女王を自ら捨てたため、呪われて脱落しました！`);
             this.nextTurn();
             return;
         }
 
-        const targetPlayer = target && target.targetPlayerId ? this.players.find(p => p.id === target.targetPlayerId) : null;
-
-        if (targetPlayer && targetPlayer.protected && targetPlayer.id !== player.id) {
-            this.log(`🛡️ ${targetPlayer.name} は僧侶で守られているため、効果は不発に終わりました。`);
+        // 対象プレイヤーの割り出し
+        const t = this.players.find(pl => pl.id === target.targetPlayerId);
+        
+        // 対象が保護（乙女）されている場合は効果不発
+        if (t && t.protected && cardValue !== 4) {
+            this.log(`🛡️ ${t.name} は乙女の効果で守られているため、効果は発動しなかった！`);
             this.nextTurn();
             return;
         }
+
+        // 課題6対応：相手の狙う手札スロット（指定がなければ0番目）
+        const targetSlot = target.targetCardIndex !== undefined ? target.targetCardIndex : 0;
 
         switch (cardValue) {
-            case 1: 
-                if (targetPlayer) {
-                    const guessed = parseInt(target.guessCardValue);
-                    const actual = targetPlayer.hand[0]; // 簡易ルール: 1枚目を対象とする
-                    this.log(`[兵士] ${targetPlayer.name} の手札を「${this.cardSettings[guessed]?.name || guessed}」と予想。`);
-                    if (actual === guessed) {
-                        this.log(`🎯 的中！ ${targetPlayer.name} が脱落しました。`);
-                        this.eliminatePlayer(targetPlayer);
-                    } else {
-                        this.log(`❌ ハズレました。`);
-                    }
-                }
-                break;
-
-            case 2: 
-                if (targetPlayer) {
-                    this.log(`[道化] ${player.name} は ${targetPlayer.name} の手札を確認した。`);
-                    if (window.myId === player.id) {
-                        alert(`【道化の効果】\n${targetPlayer.name} の手札は [ ${targetPlayer.hand.join(", ")} ] です。`);
-                    }
-                }
-                break;
-
-            case 3: 
-                if (targetPlayer) {
-                    this.log(`[騎士] ${player.name} と ${targetPlayer.name} が手札を比較。`);
-                    const myCard = player.hand[0] || 0;
-                    const enemyCard = targetPlayer.hand[0] || 0;
-                    if (myCard > enemyCard) {
-                        this.log(`💥 ${targetPlayer.name}(${enemyCard}) の脱落。`);
-                        this.eliminatePlayer(targetPlayer);
-                    } else if (enemyCard > myCard) {
-                        this.log(`💥 ${player.name}(${myCard}) の脱落。`);
-                        this.eliminatePlayer(player);
-                    } else {
-                        this.log(`🤝 引き分けです。`);
-                    }
-                }
-                break;
-
-            case 4: 
-                player.protected = true;
-                this.log(`🛡️ ${player.name} は次の手番まで効果を受けません。`);
-                break;
-
-            case 5: 
-                if (targetPlayer) {
-                    const discarded = targetPlayer.hand.pop();
-                    this.log(`[魔術師] ${targetPlayer.name} は手札「${this.cardSettings[discarded]?.name || discarded}」を捨てさせられた。`);
-                    if (discarded !== undefined) targetPlayer.history.push(discarded);
+            case 1: // 兵士（当てたら暗殺）
+                if (t) {
+                    const enemyCard = t.hand[targetSlot];
+                    const guessNum = target.guessCardValue;
+                    const guessName = this.cardSettings[guessNum]?.name || guessNum;
+                    this.log(`⚔ ${p.name} は ${t.name} の手札(${targetSlot + 1}枚目)を「${guessNum}: ${guessName}」と予想！`);
                     
-                    if (discarded === 8) {
-                        this.log(`💥 女王が捨てられたため ${targetPlayer.name} は脱落しました。`);
-                        this.eliminatePlayer(targetPlayer);
+                    if (enemyCard === guessNum) {
+                        t.alive = false;
+                        t.history.push(...t.hand);
+                        t.hand = [];
+                        this.log(`🎯 見事に的中！ ${t.name} は暗殺され脱落しました。`);
                     } else {
-                        if (this.deck.length > 0) {
-                            targetPlayer.hand.push(this.deck.pop());
-                            this.checkChancellorBurst(targetPlayer);
+                        this.log(`❌ 予想は外れた...`);
+                    }
+                }
+                break;
+
+            case 2: // 魔術師（のぞき見）
+                if (t) {
+                    const enemyCard = t.hand[targetSlot] || t.hand[0];
+                    this.log(`🔮 ${p.name} は ${t.name} の手札(${targetSlot + 1}枚目)を魔術でのぞき見した！`);
+                    
+                    // 課題5解決：ホスト処理中、のぞき見した本人限定でUIにシームレス表示させる命令データを仕込む
+                    p.pendingSecretView = {
+                        targetName: t.name,
+                        cardValue: enemyCard
+                    };
+                }
+                break;
+
+            case 3: // 僧侶（力比べ）
+                if (t) {
+                    const myCard = p.hand[0]; // 僧侶発動後の自分の残り手札
+                    const enemyCard = t.hand[targetSlot] || t.hand[0];
+                    this.log(`⚖ ${p.name} と ${t.name} はお互いの手札の力（数字）を比べ合っている...`);
+
+                    if (myCard === undefined || enemyCard === undefined) break;
+
+                    if (myCard < enemyCard) {
+                        p.alive = false;
+                        p.history.push(...p.hand);
+                        p.hand = [];
+                        this.log(`💀 力負けした ${p.name} が脱落しました。`);
+                    } else if (myCard > enemyCard) {
+                        t.alive = false;
+                        t.history.push(...t.hand);
+                        t.hand = [];
+                        this.log(`💀 力負けした ${t.name} が脱落しました。`);
+                    } else {
+                        this.log(`🤝 お互いの数字は同じだった！引き分けです。`);
+                    }
+                }
+                break;
+
+            case 4: // 乙女（無敵化）
+                p.protected = true;
+                this.log(`🛡️ ${p.name} は聖なるバリアを張り、次のターンまで無敵状態になりました。`);
+                break;
+
+            case 5: // 高官（強制撃ち落としドロー）
+                if (t) {
+                    const discardedCard = t.hand[targetSlot] || t.hand.pop();
+                    if (discardedCard !== undefined) {
+                        // 捨てさせる
+                        if (t.hand.indexOf(discardedCard) !== -1) {
+                            t.hand.splice(t.hand.indexOf(discardedCard), 1);
+                        }
+                        t.history.push(discardedCard);
+                        const discName = this.cardSettings[discardedCard]?.name || discardedCard;
+                        this.log(`袋叩き！ ${t.name} は手札(${targetSlot + 1}枚目)の「${discardedCard}: ${discName}」を強制的に捨てさせられた！`);
+
+                        // 捨てさせられたのが女王なら即脱落
+                        if (discardedCard === 8) {
+                            t.alive = false;
+                            t.hand = [];
+                            this.log(`💥 ${t.name} は捨てさせられたカードが「女王」だったため、即座に敗北した！`);
+                        } else {
+                            // 生きていれば山札から1枚補充
+                            if (this.deck.length > 0) {
+                                t.hand.push(this.deck.pop());
+                                this.log(`📥 ${t.name} は新しく山札から1枚ドローしました。`);
+                            }
                         }
                     }
                 }
                 break;
 
-            case 6: 
-                if (targetPlayer) {
-                    this.log(`[将軍] ${player.name} と ${targetPlayer.name} の手札を交換しました。`);
-                    const temp = [...player.hand];
-                    player.hand = [...targetPlayer.hand];
-                    targetPlayer.hand = temp;
-
-                    this.checkChancellorBurst(player);
-                    this.checkChancellorBurst(targetPlayer);
+            case 6: // 将軍（手札スロット入れ替え）
+                if (t) {
+                    const myCard = p.hand[0];
+                    const enemyCard = t.hand[targetSlot];
+                    if (myCard !== undefined && enemyCard !== undefined) {
+                        p.hand[0] = enemyCard;
+                        t.hand[targetSlot] = myCard;
+                        this.log(`🔄 将軍の命令により、 ${p.name} の手札と ${t.name} の手札(${targetSlot + 1}枚目)が極秘裏に入れ替わった！`);
+                    }
                 }
+                break;
+
+            case 7: // 賢者（効果なし）
+                this.log(`🍃 賢者は何もせず、静かに捨て札置き場へ流れていきました。`);
                 break;
         }
 
         this.nextTurn();
-    },
+    }
 
-    checkChancellorBurst(p) {
-        if (!p.alive || p.spectator) return false;
-        if (p.hand.includes(7)) {
-            const sum = p.hand.reduce((a, b) => a + b, 0);
-            if (sum >= 12) {
-                this.log(`💥 バースト!! ${p.name} は大臣(7)を含む手札合計が ${sum} になったため即脱落。`);
-                p.hand.forEach(c => p.history.push(c));
-                this.eliminatePlayer(p);
-                this.nextTurn();
-                return true;
-            }
-        }
-        return false;
-    },
-
-    eliminatePlayer(p) {
-        p.alive = false;
-        p.hand = [];
-    },
-
-    isGameEnded() {
-        const alive = this.players.filter(p => p.alive && !p.spectator);
-        return alive.length <= 1 || this.deck.length === 0;
-    },
-
+    // ラウンドの終了・勝者判定
     endRound() {
         this.isGameStarted = false;
-        this.log("🏁 ラウンドが終了しました！");
+        this.log(`🏁 ラウンドが終了しました！勝敗判定を行います。`);
 
-        let winners = [];
-        let maxVal = -1;
+        const alives = this.players.filter(p => p.alive && !p.spectator);
 
-        this.players.forEach(p => {
-            if (p.alive && !p.spectator) {
-                const maxCard = Math.max(...p.hand, 0);
-                if (maxCard > maxVal) {
-                    maxVal = maxCard;
+        if (alives.length === 1) {
+            const winner = alives[0];
+            winner.score++;
+            this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利)`);
+        } else if (alives.length > 1) {
+            this.log(`🎴 山札が尽きたため、残ったプレイヤーの手札の強さ（合計値）で勝負します！`);
+            
+            let maxVal = -1;
+            let winners = [];
+
+            alives.forEach(p => {
+                const totalStrength = p.hand.reduce((sum, v) => sum + v, 0);
+                const handText = p.hand.join(", ");
+                this.log(`👤 ${p.name} の手札: [${handText}] (合計パワー: ${totalStrength})`);
+
+                if (totalStrength > maxVal) {
+                    maxVal = totalStrength;
                     winners = [p];
-                } else if (maxCard === maxVal) {
+                } else if (totalStrength === maxVal) {
                     winners.push(p);
                 }
-            }
-        });
+            });
 
-        if (winners.length > 0) {
             winners.forEach(w => {
                 w.score++;
-                this.log(`🏆 勝者: ${w.name} (手札強さ: ${maxVal})! [現在: ${w.score}勝]`);
+                this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利)`);
             });
         } else {
-            this.log("生存者がいないため引き分けです。");
+            this.log(`🤝 全員が同時に脱落したため、このラウンドは引き分けです。`);
         }
 
-        const startBtn = document.getElementById("start-game-btn");
+        // ホスト用UIに「次のラウンド」ボタンを出現させるトリガー
         const nextBtn = document.getElementById("next-round-btn");
-        if (startBtn) startBtn.style.display = "none";
-        if (nextBtn && window.isHost) nextBtn.style.display = "block";
-    },
-
-    log(message) {
-        const logBox = document.getElementById("log-box");
-        if (logBox) {
-            const div = document.createElement("div");
-            div.innerText = message;
-            logBox.appendChild(div);
-            logBox.scrollTop = logBox.scrollHeight;
+        if (nextBtn && window.isHost) {
+            nextBtn.style.display = "block";
         }
     }
-};
+}
+
+export const game = new GameLogic();
