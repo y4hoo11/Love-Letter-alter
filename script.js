@@ -1,7 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・ドロー枚数＆カード枚数カスタム同期機能搭載）
- * 全員が最初の番に「最初のドロー枚数」を引くようにロジックを修正
+ * 初手ドロー枚数を「初期手札枚数」として完全適用＆全ログ同期修正版
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -21,8 +21,8 @@ class LoveLetterCustomGame {
 
         // ドロー枚数のカスタム設定用プロパティ
         this.drawSettings = {
-            firstTurnCount: 1, // 各プレイヤーの「最初の番」に引く追加枚数
-            everyTurnCount: 1  // 各プレイヤーの「2回目以降の番」に引く枚数
+            firstTurnCount: 1, // 【正確な定義】ゲーム開始時に配られる「初期の手札枚数」
+            everyTurnCount: 1  // 毎ターンの手番がまわってきた時に引く枚数
         };
 
         this.deck = [];
@@ -58,8 +58,8 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 必要枚数のチェック
-        const minRequired = playerList.length + this.drawSettings.firstTurnCount + (playerList.length < 4 ? 4 : 1);
+        // 必要枚数のチェック (初期手札枚数と毎ターンドローを考慮)
+        const minRequired = (playerList.length * this.drawSettings.firstTurnCount) + this.drawSettings.everyTurnCount + (playerList.length < 4 ? 4 : 1);
         if (this.deck.length < minRequired) {
             this.log(`エラー: カードの総枚数(${this.deck.length}枚)が不足しています。枚数を増やしてください。`);
             return false;
@@ -77,8 +77,7 @@ class LoveLetterCustomGame {
                 alive: true,
                 protected: false,
                 history: [],
-                score: existing ? existing.score : 0,
-                isFirstTurn: true // 【重要】各プレイヤーが「自分の最初の番を迎えたか」のフラグ
+                score: existing ? existing.score : 0
             };
         });
 
@@ -91,10 +90,14 @@ class LoveLetterCustomGame {
             }
         }
 
-        // 【修正点】ゲーム開始時は、全員に「最初のベースとなる1枚」だけを配る（ここでは余分にドローさせない）
+        // 🔄【修正】ゲーム開始時の「初手枚数」分、全員にカードをまとめて配りきる
         for (let player of this.players) {
-            player.hand.push(this.deck.pop());
-            this.checkChancellorBurst(player);
+            for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
+                if (this.deck.length > 0) {
+                    player.hand.push(this.deck.pop());
+                }
+            }
+            this.checkChancellorBurst(player); // 大臣の即バーストチェック
         }
 
         this.turnIndex = 0;
@@ -113,12 +116,10 @@ class LoveLetterCustomGame {
 
         currentPlayer.protected = false; // 僧侶解除
 
-        // 【修正点】1番手も含め、全員が「自分の最初の番」になった瞬間に設定された「最初のドロー枚数」を引く
-        const drawCount = currentPlayer.isFirstTurn ? this.drawSettings.firstTurnCount : this.drawSettings.everyTurnCount;
-        currentPlayer.isFirstTurn = false; // 最初のターンフラグを消化
+        // 🔄【修正】手番がまわってきた時は、1番手もそれ以降も一律で「毎ターンのドロー枚数」を引く
+        const drawCount = this.drawSettings.everyTurnCount;
 
         if (this.deck.length >= drawCount) {
-            // 設定された枚数分カードを引く
             for (let i = 0; i < drawCount; i++) {
                 const drawnCard = this.deck.pop();
                 currentPlayer.hand.push(drawnCard);
@@ -131,6 +132,10 @@ class LoveLetterCustomGame {
                 this.checkRoundEndConditions();
                 return;
             }
+            
+            // 🌐【重要】手番開始ログと山札減少をリアルタイムで全員に同期
+            broadcastState();
+            updateUI();
         } else {
             // ドロー枚数が足りない場合は山札切れでラウンド終了
             this.endRound();
@@ -298,6 +303,8 @@ class LoveLetterCustomGame {
 
     getAlivePlayers() { return this.players.filter(p => p.alive); }
     shuffle(a) { for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} }
+    
+    // 🌐 ゲストにもログ変更を通知するため、独自のログ受信処理を組み込む
     log(msg) {
         const lb = document.getElementById("log-box");
         if(lb) { lb.innerHTML += `<div>${msg}</div>`; lb.scrollTop = lb.scrollHeight; }
@@ -376,7 +383,7 @@ function joinRoom() {
     myPlayerName = document.getElementById("name-input").value.trim() || "ゲスト";
     
     if (targetRoomId.length !== 8 || isNaN(targetRoomId)) {
-        alert("エラー: 部屋IDは数字8桁で入してください。");
+        alert("エラー: 部屋IDは数字8桁で入力してください。");
         return;
     }
 
@@ -421,6 +428,13 @@ function handleReceivedData(data, conn) {
         }
     } else {
         if (data.type === "SYNC") {
+            // ログの同期：ホスト側で追加された新しいログ行をゲストに反映
+            const lb = document.getElementById("log-box");
+            if(lb && data.logHTML) {
+                lb.innerHTML = data.logHTML;
+                lb.scrollTop = lb.scrollHeight;
+            }
+            
             Object.assign(game, data.gameState);
             rawPlayerList = data.rawPlayerList;
             
@@ -430,11 +444,13 @@ function handleReceivedData(data, conn) {
     }
 }
 
-// ホストから全員に現在の状況を配信
+// ホストから全員に現在の状況を配信 (ログデータも添付して同期)
 function broadcastState() {
     if (!isHost) return;
+    const lb = document.getElementById("log-box");
     const syncData = {
         type: "SYNC",
+        logHTML: lb ? lb.innerHTML : "", // ログエリアの全HTMLを送信
         gameState: {
             deck: game.deck,
             removedCard: game.removedCard,
@@ -480,6 +496,9 @@ function hostStartGame() {
 
         broadcastState();
         updateUI();
+        
+        // 最初のターンを開始
+        game.startTurn();
     }
 }
 
@@ -529,13 +548,13 @@ function injectCustomSettingsUIIntoGame() {
     htmlContent += `
         <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
         <div class="setting-item">
-            <span class="setting-card-info">初手（最初の番）のドロー枚数</span>
+            <span class="setting-card-info">初手（ゲーム開始時）の手札枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-first" value="${game.drawSettings.firstTurnCount}" min="1" max="5" onchange="onHostChangeDraw('first', this.value)"> 枚
             </div>
         </div>
         <div class="setting-item">
-            <span class="setting-card-info">毎ターン（2周目以降）のドロー枚数</span>
+            <span class="setting-card-info">手番ごとのドロー枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-every" value="${game.drawSettings.everyTurnCount}" min="1" max="5" onchange="onHostChangeDraw('every', this.value)"> 枚
             </div>
@@ -589,13 +608,13 @@ function syncGuestSettingsUI(hostCardSettings, hostDrawSettings) {
     htmlContent += `
         <h4 style="margin: 15px 0 5px 0; color:#f1c40f; font-size:0.85rem; border-top:1px solid #4f5d73; padding-top:10px;">🎲 ドロー枚数設定</h4>
         <div class="setting-item">
-            <span class="setting-card-info">初手（最初の番）のドロー枚数</span>
+            <span class="setting-card-info">初手（ゲーム開始時）の手札枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-first" value="${hostDrawSettings.firstTurnCount}" disabled> 枚
             </div>
         </div>
         <div class="setting-item">
-            <span class="setting-card-info">毎ターン（2周目以降）のドロー枚数</span>
+            <span class="setting-card-info">手番ごとのドロー枚数</span>
             <div class="setting-input-wrapper">
                 <input type="number" id="draw-count-every" value="${hostDrawSettings.everyTurnCount}" disabled> 枚
             </div>
