@@ -29,7 +29,7 @@ export function handleHostReceiveData(conn, data) {
 
     switch (data.type) {
         case "JOIN":
-            // 課題8: 同一プレイヤー名の接続切れ復帰チェック
+            // 同一プレイヤー名の接続切れ復帰チェック
             const disconnectedPlayer = rawPlayerList.find(p => p.name === data.name && p.disconnected);
             
             if (disconnectedPlayer) {
@@ -90,16 +90,14 @@ export function handleGuestReceiveData(data) {
         game.cardSettings = data.gameState.cardSettings;
         game.drawSettings = data.gameState.drawSettings;
 
-        // サーバ側（ホスト側）から同期されたリストをそのまま受け取る（課題6: 全員が見れる状態を維持）
+        // サーバ側（ホスト側）から同期されたリストをそのまま受け取る
         rawPlayerList = data.rawPlayerList;
 
-        // 自分に👑ホスト権限が移ってきたかをチェック（課題2, 3）
+        // 自分に👑ホスト権限が移ってきたかをチェック
         const myInfo = rawPlayerList.find(p => p.id === window.myId);
         if (myInfo && myInfo.isHost) {
             isHost = true;
             game.log("👑 あなたが新しいホストになりました！");
-            // 新ホストとして他の残存コネクションを引き継ぐ仕組みはP2Pの構造上フルメッシュで
-            // ない場合再接続が必要ですが、UIは即座にホスト専用へと切り替わります。
         }
 
         updateUI();
@@ -111,9 +109,9 @@ function handlePlayerDisconnect(peerId) {
     const leftPlayer = rawPlayerList.find(p => p.id === peerId);
     if (!leftPlayer) return;
 
-    // 課題7: 離脱したプレイヤーは「接続切れ」としてリストに隠蔽保持
+    // 離脱したプレイヤーは「接続切れ」としてリストに隠蔽保持
     leftPlayer.disconnected = true;
-    game.log(`🚪 ${leftPlayer.name} が一時退室（接続切れ）しました。`);
+    game.log(`🚪 ${leftPlayer.name} が退室（接続切れ）しました。`);
     
     guestConnections = guestConnections.filter(c => c.peer !== peerId);
 
@@ -129,7 +127,7 @@ function handlePlayerDisconnect(peerId) {
         }
     }
 
-    // 課題2: ホストが切断された場合、残っている最も入室が早い（配列の先頭）プレイヤーに権限を移行
+    // ホストが切断された場合、残っている最も入室が早い（配列の先頭）プレイヤーに権限を移行
     if (leftPlayer.isHost) {
         leftPlayer.isHost = false;
         // 接続が切れていないプレイヤーの中から選出
@@ -151,9 +149,10 @@ function handlePlayerDisconnect(peerId) {
 export function broadcastState() {
     if (!isHost) return;
 
+    // タイポバグ（data.gameStateの不正参照）を修正完了
     const payload = JSON.stringify({
         type: "SYNC_STATE",
-        rawPlayerList: rawPlayerList, // 課題6, 7用に追加
+        rawPlayerList: rawPlayerList, 
         gameState: {
             isGameStarted: game.isGameStarted,
             deck: game.deck,
@@ -181,13 +180,27 @@ export function hostKickPlayer(peerId) {
     handlePlayerDisconnect(peerId);
 }
 
+// ホスト用：「接続切れ」状態のプレイヤーを表示ごとリストから抹殺する
+export function hostRemoveDisconnectedPlayer(peerId) {
+    if (!isHost) return;
+    const target = rawPlayerList.find(p => p.id === peerId);
+    if (target) {
+        game.log(`🗑️ ${target.name} のデータがルームから完全に削除されました。`);
+    }
+    // 配列から完全除外
+    rawPlayerList = rawPlayerList.filter(p => p.id !== peerId);
+    
+    broadcastState();
+    updateUI();
+}
+
 // ホスト用：ホスト権限の譲渡
 export function hostTransferAuthority(peerId) {
     if (!isHost) return;
     const target = rawPlayerList.find(p => p.id === peerId);
     if (!target || target.disconnected) return;
 
-    // 現ホストフラグを下ろし、ターゲットをホストに設定（課題2, 3）
+    // 現ホストフラグを下ろし、ターゲットをホストに設定
     const currentHost = rawPlayerList.find(p => p.id === window.myId);
     if (currentHost) currentHost.isHost = false;
     
