@@ -1,7 +1,7 @@
 // script.js
 import { game } from "./game-logic.js";
 import { updateUI, hostStartGame, hostNextRound, injectCustomSettingsUIIntoGame, injectAbortButton } from "./ui-manager.js";
-import { leaveRoom } from "./network-manager.js";
+import { leaveRoom, setRawPlayerList, setConnections, setConnToHost, setIsHost, handleHostReceiveData, handleGuestReceiveData } from "./network-manager.js";
 
 let peer = null;
 
@@ -13,19 +13,12 @@ document.addEventListener("DOMContentLoaded", () => {
         window.myId = id; 
         const idDisplay = document.getElementById("my-peer-id");
         if (idDisplay) {
-            // 強調を無くし、シンプルなプレーンテキストに変更
             idDisplay.innerText = `部屋ID: ${id} (クリックでコピー)`;
-            
-            // クリックでクリップボードにコピーする機能を追加
             idDisplay.onclick = () => {
                 navigator.clipboard.writeText(id).then(() => {
                     const originalText = idDisplay.innerText;
                     idDisplay.innerText = "📋 コピーしました！";
-                    setTimeout(() => {
-                        idDisplay.innerText = originalText;
-                    }, 1000);
-                }).catch(err => {
-                    console.error("コピーに失敗しました:", err);
+                    setTimeout(() => idDisplay.innerText = originalText, 1000);
                 });
             };
         }
@@ -37,7 +30,6 @@ document.addEventListener("DOMContentLoaded", () => {
         if (idDisplay) idDisplay.innerText = `❌ エラーが発生しました: ${err.type}`;
     });
 
-    // 各ボタンへのイベントリスナー登録
     document.getElementById("be-host-btn")?.addEventListener("click", beHost);
     document.getElementById("join-room-btn")?.addEventListener("click", joinRoom);
     document.getElementById("leave-room-btn")?.addEventListener("click", leaveRoom);
@@ -48,9 +40,11 @@ document.addEventListener("DOMContentLoaded", () => {
 function beHost() {
     const nameInput = document.getElementById("name-input");
     window.myPlayerName = nameInput ? nameInput.value.trim() : "ホスト";
-    window.isHost = true;
+    setIsHost(true);
 
-    window.rawPlayerList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0 }];
+    // ホスト自身をリストの先頭に登録
+    const initialList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0 }];
+    setRawPlayerList(initialList);
 
     document.getElementById("setup-container").style.display = "none";
     document.getElementById("game-container").style.display = "block";
@@ -59,14 +53,19 @@ function beHost() {
     injectAbortButton();
     
     updateUI();
-    game.log(`🏠 部屋を作成しました。ゲストの参加を待っています...`);
+    game.log(`🏠 部屋を作成しました。部屋IDを友達に共有してください。`);
 
+    // ゲストの接続待ち受け
     peer.on('connection', (conn) => {
-        window.connections.push(conn);
+        setConnections(conn); // 接続を配列に保存
         
         conn.on('data', (dataStr) => {
-            const data = JSON.parse(dataStr);
-            game.log(`📩 ゲストからメッセージ受信: ${data.type}`);
+            try {
+                const data = JSON.parse(dataStr);
+                handleHostReceiveData(conn, data);
+            } catch (e) {
+                console.error("データ解析エラー:", e);
+            }
         });
     });
 }
@@ -82,12 +81,12 @@ function joinRoom() {
 
     const nameInput = document.getElementById("name-input");
     window.myPlayerName = nameInput ? nameInput.value.trim() : "ゲスト";
-    window.isHost = false;
+    setIsHost(false);
 
     game.log(`🌐 部屋 [${targetRoomId}] に接続を試みています...`);
 
     const conn = peer.connect(targetRoomId);
-    window.connToHost = conn;
+    setConnToHost(conn);
 
     conn.on('open', () => {
         game.log(`🟢 ホストに接続しました！認証中...`);
@@ -101,7 +100,13 @@ function joinRoom() {
         document.getElementById("game-container").style.display = "block";
     });
 
+    // ホストからデータ（同期情報）が送られてきた時
     conn.on('data', (dataStr) => {
-        const data = JSON.parse(dataStr);
+        try {
+            const data = JSON.parse(dataStr);
+            handleGuestReceiveData(data);
+        } catch (e) {
+            console.error("データ解析エラー:", e);
+        }
     });
 }
