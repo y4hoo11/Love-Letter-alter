@@ -404,23 +404,23 @@ window.addEventListener('load', () => {
     });
 
     peer.on('connection', (conn) => {
-        if (!isHost) {
-            conn.close();
-            return;
-        }
-        
-        connections.push(conn);
-        
+        // 接続が確立した際の処理
+        conn.on('open', () => {
+            connections.push(conn);
+            game.log(`🔗 プレイヤーと接続しました: ${conn.peer}`);
+            // 接続した瞬間に最新の状態を同期してあげる
+            broadcastState(); 
+        });
+
         conn.on('data', (rawMsg) => {
             try {
                 const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
                 handleReceivedData(data, conn);
-            } catch(e) {
-                console.error("データ解析失敗:", e);
-            }
+            } catch(e) { console.error("データ解析失敗:", e); }
         });
 
         conn.on('close', () => {
+            connections = connections.filter(c => c.peer !== conn.peer);
             handlePlayerDisconnect(conn.peer);
         });
     });
@@ -460,55 +460,29 @@ function joinRoom() {
     const targetRoomId = document.getElementById("room-id-input").value.trim();
     myPlayerName = document.getElementById("name-input").value.trim() || "ゲスト";
     
-    if (targetRoomId.length !== 8 || isNaN(targetRoomId)) {
-        alert("エラー: 部屋IDは数字8桁で入力してください。");
+    if (targetRoomId.length !== 8) {
+        alert("エラー: 部屋IDは数字8桁です。");
         return;
     }
 
-    // 📥 参加者側の画面にリアルタイムな接続進捗ログを出力
-    document.getElementById("game-container").style.display = "block"; // ログを見せるためにコンテナを先行表示
-    game.logData = []; // ログを一旦リセット
-    game.log(`⏳ 部屋「${targetRoomId}」への接続を試みています…`);
+    game.log(`⏳ 接続中... ID: ${targetRoomId}`);
     
-    connToHost = peer.connect(targetRoomId, { 
-        serialization: "none"
+    connToHost = peer.connect(targetRoomId, {
+        reliable: true // 信頼性の高い通信を強制
     });
 
-    // 接続プロセス（ICEトンネル構築）の可視化
-    if (connToHost.peerConnection) {
-        connToHost.peerConnection.oniceconnectionstatechange = () => {
-            const state = connToHost.peerConnection.iceConnectionState;
-            if (state === "checking") {
-                game.log("🟡 P2P通信トンネルを構築中... (回線認証中)");
-            } else if (state === "connected" || state === "completed") {
-                game.log("🟢 ネットワーク経路の確立に成功しました！");
-            } else if (state === "failed") {
-                game.log("❌ 回線同士の直接接続に失敗しました。お互いのWi-Fiのセキュリティ制限が原因の可能性があります。");
-            }
-        };
-    }
-
     connToHost.on('open', () => {
-        isHost = false; 
-        document.getElementById("setup-container").style.display = "none";
-        game.log(`✅ ホストへの通信接続に成功しました！入室をリクエスト中…`);
-        
-        // ホストに自分の情報を送信
+        game.log(`✅ 接続確立！入室シグナルを送信中…`);
         safeSend(connToHost, { type: "JOIN", name: myPlayerName, id: myId });
     });
 
     connToHost.on('data', (rawMsg) => {
-        try {
-            const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
-            handleReceivedData(data, null);
-        } catch(e) {
-            console.error("データ解析失敗:", e);
-        }
+        const data = (typeof rawMsg === "string") ? JSON.parse(rawMsg) : rawMsg;
+        handleReceivedData(data, null);
     });
 
-    connToHost.on('close', () => {
-        alert("ホストとの接続が切れたか、入室が拒否されました。");
-        location.reload();
+    connToHost.on('error', (err) => {
+        game.log(`❌ 通信エラー: ${err.message}`);
     });
 }
 
