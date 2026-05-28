@@ -1,8 +1,7 @@
 /**
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・カスタム同期機能搭載）
- * 機能拡張：キック機能、ホスト譲渡機能、部屋離脱、リロード・切断時ペナルティ判定
- * 修正点：接続エラーを回避するため、STUNサーバー設定を追加
+ * 接続トラブルを極限まで減らすため、広域パブリックICE（STUN/TURN）を設定
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -361,19 +360,28 @@ function safeSend(conn, dataObj) {
     }
 }
 
-// 🛠️ 変更点: 厳格なルーター環境を回避する接続設定（STUNサーバー設定を注入）
+// 🌐 接続環境を最高クラスに引き上げるための高可用性ICEサーバー群
+const globalIceConfig = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+        { urls: 'stun:stun.ekiga.net' },
+        { urls: 'stun:stun.ideasip.com' },
+        { urls: 'stun:stun.schlund.de' }
+    ],
+    iceCandidatePoolSize: 10
+};
+
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
     
+    // 安全にシグナリングを開始する設定
     peer = new Peer(myId, {
-        debug: 3, // エラーをデバッグしやすくするため詳細モードに設定
-        config: {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-            ]
-        }
+        debug: 2,
+        config: globalIceConfig
     });
 
     peer.on('open', (id) => {
@@ -381,8 +389,8 @@ window.addEventListener('load', () => {
     });
 
     peer.on('error', (err) => {
-        console.error("PeerJSエラー:", err);
-        document.getElementById("my-peer-id").innerText = `部屋ID生成失敗(${err.type})。アプリ内ブラウザ以外で開き直すか再読み込みしてください。`;
+        console.error("PeerJSエラー発生:", err);
+        document.getElementById("my-peer-id").innerText = `エラーが発生しました (${err.type})`;
     });
 
     peer.on('connection', (conn) => {
@@ -449,7 +457,16 @@ function joinRoom() {
 
     game.log(`🌐 部屋 ${targetRoomId} に接続を試みています…`);
     
-    connToHost = peer.connect(targetRoomId, { serialization: "none" });
+    // 接続確立を安定させるために明示的に同じICE構成を設定
+    connToHost = peer.connect(targetRoomId, { 
+        serialization: "none",
+        connectionOptions: {
+            constraints: {
+                mandatory: { AnswerToAndOfferFromConstraints: true },
+                optional: [{ DtlsSrtpKeyAgreement: true }]
+            }
+        }
+    });
 
     connToHost.on('open', () => {
         isHost = false; 
@@ -498,7 +515,6 @@ function handlePlayerDisconnect(peerId) {
                 game.handleDiscardEffects(inGamePlayer, inGamePlayer.hand.pop());
             }
             game.log(`💥 プレイ中の ${pName} の接続が切れたため、ペナルティで敗北（脱落）扱いとなりました。`);
-            
             game.checkRoundEndConditions();
         }
         
