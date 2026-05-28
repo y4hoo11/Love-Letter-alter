@@ -46,7 +46,6 @@ h2, h3 {
     margin-bottom: 15px;
 }
 
-/* ⚙️ ホスト専用：カード枚数設定カスタマイズエリア */
 .custom-card-settings {
     background: #1a252f;
     padding: 12px;
@@ -155,7 +154,6 @@ button:active {
     border-left: 4px solid #f1c40f;
 }
 
-/* 👥 プレイヤーボード構造 */
 .player-list-container {
     max-height: 300px;
     overflow-y: auto;
@@ -188,7 +186,6 @@ button:active {
     margin-bottom: 8px;
 }
 
-/* 相手の手札裏面表示 */
 .enemy-hand-container {
     display: flex;
     gap: 6px;
@@ -196,7 +193,6 @@ button:active {
     align-items: center;
 }
 
-/* 🎨 カード固有のクラスカラー定義 (1-8) */
 .card-1, .tracker-1, .history-card-1 { background: #27ae60 !important; color: #fff; }
 .card-2, .tracker-2, .history-card-2 { background: #2980b9 !important; color: #fff; }
 .card-3, .tracker-3, .history-card-3 { background: #8e44ad !important; color: #fff; }
@@ -206,7 +202,6 @@ button:active {
 .card-7, .tracker-7, .history-card-7 { background: #7f8c8d !important; color: #fff; }
 .card-8, .tracker-8, .history-card-8 { background: #f1c40f !important; color: #2c3e50 !important; border-color: #fff !important; }
 
-/* プレイ履歴 */
 .played-history {
     display: flex;
     flex-wrap: wrap;
@@ -251,7 +246,6 @@ button:active {
     line-height: 1.4;
 }
 
-/* 🃏 自分自身の手札カードエリア */
 .card-area {
     display: flex;
     justify-content: center;
@@ -291,7 +285,6 @@ button:active {
     font-weight: bold;
 }
 
-/* 説明ツールチップ */
 .card .card-tooltip {
     visibility: hidden;
     opacity: 0;
@@ -320,7 +313,6 @@ button:active {
     }
 }
 
-/* カードトラッカー */
 #card-tracker-container {
     background: #1a252f;
     padding: 12px;
@@ -356,7 +348,6 @@ button:active {
 .tracker-num { font-size: 0.9rem; font-weight: bold; }
 .tracker-name { font-weight: bold; font-size: 0.8rem; }
 
-/* 📥 モーダルウィンドウ */
 .modal {
     display: none;
     position: fixed;
@@ -395,7 +386,6 @@ button:active {
     margin-left: 5px;
 }
 
-/* スクロールバーカスタム */
 .modal-content::-webkit-scrollbar,
 .player-list-container::-webkit-scrollbar,
 #log-box::-webkit-scrollbar {
@@ -408,7 +398,6 @@ button:active {
     border-radius: 3px;
 }
 
-/* 📱 スマホ対応 */
 @media (max-width: 480px) {
     body { padding: 10px; }
     #setup-container, #game-container { padding: 12px; }
@@ -422,7 +411,6 @@ button:active {
     .circle-active, .circle-used { font-size: 0.9rem; }
 }
 
-/* ゲスト用のスタイル */
 .custom-card-settings.guest-view-only {
     background: #111a22; 
     opacity: 0.5;         
