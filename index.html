@@ -20,7 +20,7 @@
         </div>
         
         <div style="display: flex; gap: 10px; margin-top: 20px;">
-            <button onclick="beHost()">🏠 部屋を作る (ホスト)</button>
+            <button id="be-host-btn">🏠 部屋を作る (ホスト)</button>
         </div>
 
         <hr style="margin: 20px 0; border: 0; border-top: 1px solid #4f5d73;">
@@ -29,13 +29,13 @@
             <label for="room-id-input">友達の部屋ID (数字8桁):</label>
             <input type="text" id="room-id-input" placeholder="12345678" maxlength="8">
         </div>
-        <button class="btn-secondary" onclick="joinRoom()">🌐 部屋に入る (ゲスト)</button>
+        <button id="join-room-btn" class="btn-secondary">🌐 部屋に入る (ゲスト)</button>
     </div>
 
     <div id="game-container" style="display: none;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <h2 style="margin:0;">ゲームボード</h2>
-            <button id="leave-room-btn" onclick="leaveRoom()">🚪 部屋を離脱</button>
+            <button id="leave-room-btn">🚪 部屋を離脱</button>
         </div>
 
         <div class="status-panel">
@@ -52,8 +52,8 @@
         <h3 id="hand-title" style="display: none; margin-bottom: 5px;">あなたの手札</h3>
         <div id="card-area" class="card-area"></div>
 
-        <button id="start-game-btn" style="display: none;" onclick="hostStartGame()">🎮 ゲーム開始</button>
-        <button id="next-round-btn" style="display: none; background: #3498db;" onclick="hostNextRound()">🔄 次のラウンドへ</button>
+        <button id="start-game-btn" style="display: none;">🎮 ゲーム開始</button>
+        <button id="next-round-btn" style="display: none; background: #3498db;">🔄 次のラウンドへ</button>
 
         <div id="card-tracker-container">
             <h3 style="font-size: 0.9rem; margin-bottom: 8px;">📊 残りカードトラッカー</h3>
@@ -67,6 +67,6 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>
