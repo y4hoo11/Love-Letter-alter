@@ -2,6 +2,7 @@
  * アークライト公式『ラブレター』ルール準拠
  * オンライン P2P対応（人数無制限・カスタム同期機能搭載）
  * 機能拡張：キック機能、ホスト譲渡機能、部屋離脱、リロード・切断時ペナルティ判定
+ * 修正点：接続エラーを回避するため、STUNサーバー設定を追加
  */
 
 // --- ⚙️ ゲームシステム・データ管理クラス ---
@@ -42,7 +43,6 @@ class LoveLetterCustomGame {
     }
 
     initRound(playerList) {
-        // 観戦者(spectator)を除外した「生存可能プレイヤー」のみでゲームを構築
         const activePlayers = playerList.filter(p => !p.spectator);
 
         if (activePlayers.length < 2) {
@@ -71,7 +71,7 @@ class LoveLetterCustomGame {
                 id: p.id,
                 name: p.name,
                 hand: [],
-                alive: !p.spectator, // 観戦者は最初から死亡(脱落)扱い
+                alive: !p.spectator, 
                 spectator: !!p.spectator,
                 protected: false,
                 history: [],
@@ -97,7 +97,6 @@ class LoveLetterCustomGame {
             this.checkChancellorBurst(player); 
         }
 
-        // 最初の生存プレイヤーのインデックスを探す
         this.turnIndex = this.players.findIndex(p => p.alive && !p.spectator);
         if (this.turnIndex === -1) this.turnIndex = 0;
 
@@ -157,7 +156,7 @@ class LoveLetterCustomGame {
         const targetHandIdx = (target.handIndex !== undefined) ? target.handIndex : 0;
 
         switch(cardValue) {
-            case 1: // 兵士
+            case 1: 
                 const targetCard = targetPlayer.hand[targetHandIdx];
                 this.log(`🏹 ${player.name} は ${targetPlayer.name} の 【${targetHandIdx + 1}枚目のカード】 を狙い、予測を【${this.cardSettings[target.guessCardValue].name}】と宣言。`);
                 
@@ -172,12 +171,12 @@ class LoveLetterCustomGame {
                 }
                 break;
 
-            case 2: // 僧侶
+            case 2: 
                 player.protected = true;
                 this.log(`🔮 ${player.name} は次の手番まで守られます。`);
                 break;
 
-            case 3: // 騎士
+            case 3: 
                 const myCompareCard = player.hand[0] || cardValue; 
                 const enemyCompareCard = targetPlayer.hand[targetHandIdx] || targetPlayer.hand[0];
                 
@@ -196,7 +195,7 @@ class LoveLetterCustomGame {
                 }
                 break;
 
-            case 4: // 魔術師
+            case 4: 
                 this.log(`🪄 ${targetPlayer.name} の【${targetHandIdx + 1}枚目の手札】を強制廃棄。`);
                 const discarded = targetPlayer.hand.splice(targetHandIdx, 1)[0];
                 targetPlayer.history.push(discarded);
@@ -215,7 +214,7 @@ class LoveLetterCustomGame {
                 }
                 break;
 
-            case 5: // 将軍
+            case 5: 
                 this.log(`🔄 ${player.name} と ${targetPlayer.name} のすべての手札を丸ごと交換。`);
                 let temp = player.hand;
                 player.hand = targetPlayer.hand;
@@ -224,11 +223,11 @@ class LoveLetterCustomGame {
                 this.checkChancellorBurst(targetPlayer);
                 break;
 
-            case 6: // 大臣
-            case 7: // 公爵
+            case 6: 
+            case 7: 
                 break;
 
-            case 8: // 姫
+            case 8: 
                 player.alive = false;
                 this.log(`💀 ${player.name} は【姫】を失い、脱落しました。`);
                 break;
@@ -260,7 +259,6 @@ class LoveLetterCustomGame {
             return;
         }
         
-        // 次の生存プレイヤーまでインデックスを進める
         do {
             this.turnIndex = (this.turnIndex + 1) % this.players.length;
         } while ((!this.players[this.turnIndex].alive || this.players[this.turnIndex].spectator) && alivePlayers.length > 0);
@@ -314,7 +312,6 @@ class LoveLetterCustomGame {
             }
         }
         
-        // 切断されて残った「観戦者」のフラグをルーム同期用リストにも反映
         this.players.forEach(p => {
             let rawP = rawPlayerList.find(rp => rp.id === p.id);
             if (rawP && p.spectator) rawP.spectator = true;
@@ -364,9 +361,20 @@ function safeSend(conn, dataObj) {
     }
 }
 
+// 🛠️ 変更点: 厳格なルーター環境を回避する接続設定（STUNサーバー設定を注入）
 window.addEventListener('load', () => {
     myId = generateNumericRoomId();
-    peer = new Peer(myId, { debug: 1 });
+    
+    peer = new Peer(myId, {
+        debug: 3, // エラーをデバッグしやすくするため詳細モードに設定
+        config: {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ]
+        }
+    });
 
     peer.on('open', (id) => {
         document.getElementById("my-peer-id").innerText = `あなたの部屋ID: ${id} (タップでコピー)`;
@@ -374,7 +382,7 @@ window.addEventListener('load', () => {
 
     peer.on('error', (err) => {
         console.error("PeerJSエラー:", err);
-        document.getElementById("my-peer-id").innerText = "部屋ID生成失敗。再読み込みしてください。";
+        document.getElementById("my-peer-id").innerText = `部屋ID生成失敗(${err.type})。アプリ内ブラウザ以外で開き直すか再読み込みしてください。`;
     });
 
     peer.on('connection', (conn) => {
@@ -383,7 +391,6 @@ window.addEventListener('load', () => {
             return;
         }
         
-        // メタデータ、またはオープン時にIDを登録するためコネクションを監視
         connections.push(conn);
         
         conn.on('data', (rawMsg) => {
@@ -395,7 +402,6 @@ window.addEventListener('load', () => {
             }
         });
 
-        // ゲストが予期せずタブを閉じる、または通信切断された場合
         conn.on('close', () => {
             handlePlayerDisconnect(conn.peer);
         });
@@ -405,7 +411,6 @@ window.addEventListener('load', () => {
     updateTrackerUI();
 });
 
-// リロード・画面を閉じる際のアクションフック
 window.addEventListener('beforeunload', () => {
     if (isHost) {
         connections.forEach(c => safeSend(c, { type: "HOST_DISCONNECT" }));
@@ -470,7 +475,6 @@ function joinRoom() {
     });
 }
 
-// 🔌 【切断・更新処理コア】プレイヤーが切断・リロードしたときのホスト側ロジック
 function handlePlayerDisconnect(peerId) {
     const playerIndex = rawPlayerList.findIndex(p => p.id === peerId);
     if (playerIndex === -1) return;
@@ -478,35 +482,26 @@ function handlePlayerDisconnect(peerId) {
     const pName = rawPlayerList[playerIndex].name;
 
     if (!game.isGameStarted) {
-        // ゲーム開始前なら「観戦者」フラグを立てる（あるいはリストから完全削除でも可、仕様通り観戦扱いに）
         rawPlayerList[playerIndex].spectator = true;
         game.log(`⚠️ ${pName} の接続が切れました。ゲーム開始前のため観戦者扱いになります。`);
         
-        // 通信配列からも整理
         connections = connections.filter(c => c.peer !== peerId);
         broadcastState();
         updatePlayerListUI();
         updateUI();
     } else {
-        // ゲーム開始後なら「敗北(即時脱落)扱い」
         const inGamePlayer = game.players.find(p => p.id === peerId);
         if (inGamePlayer && inGamePlayer.alive && !inGamePlayer.spectator) {
             inGamePlayer.alive = false;
-            inGamePlayer.spectator = true; // 今後復帰しても観戦
+            inGamePlayer.spectator = true; 
             while(inGamePlayer.hand.length > 0) {
                 game.handleDiscardEffects(inGamePlayer, inGamePlayer.hand.pop());
             }
             game.log(`💥 プレイ中の ${pName} の接続が切れたため、ペナルティで敗北（脱落）扱いとなりました。`);
             
-            // 該当プレイヤーの手番だった場合、または終了判定を回す
-            if (game.players[game.turnIndex].id === peerId) {
-                game.checkRoundEndConditions();
-            } else {
-                game.checkRoundEndConditions();
-            }
+            game.checkRoundEndConditions();
         }
         
-        // ルームリスト側も同期
         rawPlayerList[playerIndex].spectator = true;
         connections = connections.filter(c => c.peer !== peerId);
         broadcastState();
@@ -522,7 +517,6 @@ function handleReceivedData(data, conn) {
                 rawPlayerList.push({ id: data.id, name: data.name, spectator: false });
                 game.log(`👥 ${data.name} が参加しました。`);
             } else {
-                // リロードなどによる再接続の際、開始前なら観戦解除
                 if (!game.isGameStarted) existing.spectator = false;
                 game.log(`👥 ${data.name} が再接続しました。`);
             }
@@ -538,7 +532,6 @@ function handleReceivedData(data, conn) {
         if (data.type === "LEAVE") {
             game.log(`🚪 ${data.name || "プレイヤー"} が自主的に部屋を離脱しました。`);
             handlePlayerDisconnect(data.id);
-            // コネクションの切断を明示化
             if(conn) conn.close();
         }
     } else {
@@ -566,14 +559,11 @@ function handleReceivedData(data, conn) {
             isHost = true;
             connToHost = null;
             
-            // UIのリビルド
             document.getElementById("start-game-btn").style.display = game.isGameStarted ? "none" : "block";
             const oldArea = document.getElementById("host-card-settings-area");
             if(oldArea) oldArea.remove();
             injectCustomSettingsUIIntoGame();
             
-            // ピア接続をホスト用に再構築するため、他メンバーと繋ぎ直す処理などは
-            // 本格的なP2Pメッシュが必要ですが、今回は簡易メッセージの切り替えを最優先します。
             broadcastState();
             updateUI();
         }
@@ -603,7 +593,6 @@ function broadcastState() {
     });
 }
 
-// ⚙️ 【新設】ホストによるキック機能実行
 function hostKickPlayer(peerId) {
     if (!isHost) return;
     const target = rawPlayerList.find(p => p.id === peerId);
@@ -618,14 +607,13 @@ function hostKickPlayer(peerId) {
             setTimeout(() => conn.close(), 200);
         }
         handlePlayerDisconnect(peerId);
-        rawPlayerList = rawPlayerList.filter(p => p.id peerId);
+        rawPlayerList = rawPlayerList.filter(p => p.id !== peerId);
         broadcastState();
         updatePlayerListUI();
         updateUI();
     }
 }
 
-// 👑 【新設】ホスト権限の譲渡機能実行
 function hostTransferAuthority(peerId) {
     if (!isHost) return;
     const target = rawPlayerList.find(p => p.id === peerId);
@@ -637,9 +625,8 @@ function hostTransferAuthority(peerId) {
             game.log(`👑 ホスト権限が ${myPlayerName} から ${target.name} へ譲渡されました。`);
             safeSend(conn, { type: "BE_HOST" });
             
-            // 自身をゲスト化
             isHost = false;
-            connToHost = conn; // 新しいホストへのコネクションとする
+            connToHost = conn; 
             connections = [];
             
             document.getElementById("start-game-btn").style.display = "none";
@@ -655,7 +642,6 @@ function hostTransferAuthority(peerId) {
     }
 }
 
-// 🚪 【新設】自主的に部屋を離脱するボタンの処理
 function leaveRoom() {
     if (confirm("本当にこの部屋から離脱しますか？")) {
         if (isHost) {
@@ -672,7 +658,6 @@ function leaveRoom() {
     }
 }
 
-// --- 🎮 ゲーム制御ボタン用関数 ---
 function hostStartGame() {
     if (!isHost) return;
     
@@ -721,7 +706,6 @@ function hostAbortGame() {
     updateUI();
 }
 
-// --- 🖥️ UI描画・DOM操作ロジック ---
 function injectCustomSettingsUIIntoGame() {
     const gameContainer = document.getElementById("game-container");
     const targetNode = document.getElementById("log-box");
@@ -846,7 +830,6 @@ function updatePlayerListUI() {
         listArea.innerHTML = "<h4>現在の参加メンバー:</h4>";
         rawPlayerList.forEach(p => {
             let ctrlButtons = "";
-            // ホスト視点かつ自分以外のメンバーにキック・譲渡ボタンを追加
             if (isHost && p.id !== myId) {
                 ctrlButtons = `
                     <button class="btn-danger" style="display:inline-block; width:auto; padding:2px 6px; font-size:0.7rem;" onclick="hostKickPlayer('${p.id}')">キック</button>
