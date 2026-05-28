@@ -16,7 +16,6 @@ export function hostStartGame() {
 // ホスト用：次のラウンドへ
 export function hostNextRound() {
     if (!isHost) return;
-    // スコアを引き継ぎつつ新ラウンド初期化
     const currentScores = {};
     game.players.forEach(p => { currentScores[p.id] = p.score; });
     
@@ -34,13 +33,11 @@ export function hostNextRound() {
 
 // 画面全体の再描画
 export function updateUI() {
-    // 1. 山札数の同期
     const deckCountEl = document.getElementById("deck-count");
     if (deckCountEl) {
         deckCountEl.innerText = game.isGameStarted ? `山札: ${game.deck.length}枚` : "山札: --枚";
     }
 
-    // 2. ロール（手番）状況表示
     const roleDisplayEl = document.getElementById("role-display");
     if (roleDisplayEl) {
         if (!game.isGameStarted) {
@@ -53,7 +50,6 @@ export function updateUI() {
         }
     }
 
-    // 3. ホスト用ゲーム開始ボタンの表示制御
     const startBtn = document.getElementById("start-game-btn");
     if (startBtn && isHost && !game.isGameStarted) {
         const nextBtn = document.getElementById("next-round-btn");
@@ -62,17 +58,12 @@ export function updateUI() {
         }
     }
 
-    // 4. プレイヤーリストの描画
     renderPlayerList();
-
-    // 5. 自分の手札エリアの描画
     renderMyHand();
-
-    // 6. トラッカー（残数計算機）の同期描画
     renderTracker();
 }
 
-// プレイヤーリストのレンダリング
+// プレイヤーリストのレンダリング（初手カード・ドローカードの区別化）
 function renderPlayerList() {
     const listEl = document.getElementById("player-list");
     if (!listEl) return;
@@ -91,7 +82,6 @@ function renderPlayerList() {
             }
         }
 
-        // ヘッダー（名前・スコア・操作ボタン）
         const header = document.createElement("div");
         header.className = "player-header";
 
@@ -100,7 +90,6 @@ function renderPlayerList() {
         nameSpan.innerHTML = `${p.name} <span class="score-badge">${p.score || 0}勝</span> ${p.protected ? "🛡️" : ""}`;
         header.appendChild(nameSpan);
 
-        // ホスト用管理ボタン（自分以外）
         if (isHost && p.id !== window.myId) {
             const btnGroup = document.createElement("div");
             
@@ -120,30 +109,58 @@ function renderPlayerList() {
         }
         item.appendChild(header);
 
-        // 手札枚数のインジケータ表示（ゲーム中のみ）
-        if (game.isGameStarted && !p.spectator && p.alive) {
+        // 🃏 相手の手札（初手かドローカードかを色と文字で区別）
+        if (game.isGameStarted && !p.spectator && p.alive && p.id !== window.myId) {
             const handContainer = document.createElement("div");
             handContainer.className = "enemy-hand-container";
-            p.hand.forEach(() => {
+            handContainer.style.marginTop = "5px";
+
+            p.hand.forEach((cardVal, index) => {
                 const cardBack = document.createElement("div");
                 cardBack.className = "card-back-red";
-                cardBack.style.width = "24px";
-                cardBack.style.height = "34px";
-                cardBack.style.border = "1px solid #fff";
+                
+                // インデックスが初期配布枚数未満なら「初手」、それ以降なら「ドロー」
+                const isInitialHand = index < game.drawSettings.firstTurnCount;
+                
+                cardBack.style.width = "55px";
+                cardBack.style.height = "40px";
+                cardBack.style.fontSize = "0.65rem";
+                cardBack.style.display = "flex";
+                cardBack.style.flexDirection = "column";
+                cardBack.style.justifyContent = "center";
+                cardBack.style.alignItems = "center";
+                cardBack.style.borderRadius = "4px";
+                cardBack.style.border = "1.5px solid #fff";
+
+                if (isInitialHand) {
+                    cardBack.style.background = "linear-gradient(135deg, #2980b9, #2c3e50)"; // 初手は青系
+                    cardBack.innerHTML = `<span style="color:#f1c40f;">★初手</span><span>[${index + 1}枚目]</span>`;
+                } else {
+                    cardBack.style.background = "linear-gradient(135deg, #e74c3c, #c0392b)"; // ドローは赤系
+                    cardBack.innerHTML = `<span style="color:#fff;">📥ドロー</span><span>[${index + 1}枚目]</span>`;
+                }
+                
                 handContainer.appendChild(cardBack);
             });
             item.appendChild(handContainer);
         }
 
-        // 捨て札履歴の描画
+        // 捨て札履歴
         if (p.history && p.history.length > 0) {
             const historyEl = document.createElement("div");
             historyEl.className = "played-history";
             p.history.forEach(val => {
-                const info = game.cardSettings[val] || { name: "?" };
+                const info = game.cardSettings[val] || { name: "?", desc: "" };
                 const badge = document.createElement("div");
                 badge.className = `history-card card-${val}`;
-                badge.innerHTML = `<div>${val}</div><div class="h-name">${info.name}</div>`;
+                badge.style.position = "relative"; 
+                badge.style.cursor = "help"; 
+
+                badge.innerHTML = `
+                    <div>${val}</div>
+                    <div class="h-name">${info.name}</div>
+                    <div class="card-tooltip" style="width:160px; font-weight:normal; bottom:120%;">${info.desc}</div>
+                `;
                 historyEl.appendChild(badge);
             });
             item.appendChild(historyEl);
@@ -180,12 +197,16 @@ function renderMyHand() {
     const currentTurnPlayer = game.players[game.turnIndex];
     const isMyTurn = currentTurnPlayer && currentTurnPlayer.id === window.myId;
 
-    me.hand.forEach(val => {
+    me.hand.forEach((val, index) => {
         const info = game.cardSettings[val] || { name: "??", desc: "" };
         const card = document.createElement("div");
         card.className = `card card-${val}`;
         
+        const isInitialHand = index < game.drawSettings.firstTurnCount;
+        const originText = isInitialHand ? "★初手" : "📥ドロー";
+
         card.innerHTML = `
+            <div style="font-size:0.65rem; background:rgba(0,0,0,0.4); padding:2px 6px; border-radius:10px; color:#fff;">${originText}</div>
             <div class="card-num">${val}</div>
             <div class="card-name">${info.name}</div>
             <div class="card-tooltip">${info.desc}</div>
@@ -202,9 +223,8 @@ function renderMyHand() {
     });
 }
 
-// カード使用時のターゲット選択モーダル展開
+// ターゲット選択モーダル
 function selectPlayTarget(cardValue) {
-    // 対象選択が不要な効果 (4:僧侶, 7:大臣, 8:女王)
     if ([4, 7, 8].includes(cardValue)) {
         executePlayCard(cardValue, {});
         return;
@@ -215,12 +235,9 @@ function selectPlayTarget(cardValue) {
     if (!modal || !container) return;
 
     container.innerHTML = `<h4>「${game.cardSettings[cardValue].name}」の対象を選択</h4>`;
-
-    // 生存している他プレイヤーをリストアップ
     const targets = game.players.filter(p => p.alive && !p.spectator && p.id !== window.myId);
 
     if (targets.length === 0) {
-        // 対象が誰もいない場合は不発として自分をターゲットに設定する（ルール準拠）
         const btn = document.createElement("button");
         btn.innerText = "対象なし（不発プレイ）";
         btn.onclick = () => {
@@ -234,7 +251,6 @@ function selectPlayTarget(cardValue) {
             btn.innerText = `${t.name} ${t.protected ? "(🛡️保護中)" : ""}`;
             btn.onclick = () => {
                 if (cardValue === 1) {
-                    // 兵士の場合はカードの予想に進む
                     selectGuessValue(cardValue, t.id);
                 } else {
                     modal.style.display = "none";
@@ -245,7 +261,6 @@ function selectPlayTarget(cardValue) {
         });
     }
 
-    // キャンセルボタン
     const cancelBtn = document.createElement("button");
     cancelBtn.innerText = "キャンセル";
     cancelBtn.style.background = "#7f8c8d";
@@ -255,13 +270,12 @@ function selectPlayTarget(cardValue) {
     modal.style.display = "flex";
 }
 
-// 兵士用：当てる数字の選択UI
+// 兵士用：数字選択
 function selectGuessValue(cardValue, targetPlayerId) {
     const container = document.getElementById("target-buttons");
     if (!container) return;
     container.innerHTML = `<h4>予想するカードを選択</h4>`;
 
-    // 兵士以外の1〜8の選択肢を作成
     for (let i = 2; i <= 8; i++) {
         const btn = document.createElement("button");
         btn.innerText = `${i}: ${game.cardSettings[i]?.name || ''}`;
@@ -273,15 +287,12 @@ function selectGuessValue(cardValue, targetPlayerId) {
     }
 }
 
-// カードの実際のプレイ命令を発行
 function executePlayCard(cardValue, target) {
     if (isHost) {
         game.playCard(window.myId, cardValue, target);
         broadcastState();
         updateUI();
     } else {
-        // ゲストはホストへ要求アクションを送信
-        const { connToHost } = require("./network-manager.js"); // 循環回避用
         if (window.connToHost && window.connToHost.open) {
             window.connToHost.send(JSON.stringify({
                 type: "ACTION",
@@ -293,13 +304,18 @@ function executePlayCard(cardValue, target) {
     }
 }
 
-// トラッカー（残数計算機）のレンダリング
+// トラッカーレンダリング
 function renderTracker() {
     const listEl = document.getElementById("card-tracker-list");
     if (!listEl) return;
     listEl.innerHTML = "";
 
-    // プレイされて既に出た各カードの枚数をカウント
+    listEl.style.display = "flex";
+    listEl.style.flexWrap = "wrap";
+    listEl.style.gap = "8px";
+    listEl.style.justifyContent = "center";
+    listEl.style.padding = "5px 0";
+
     const baseCounts = {};
     for (const [val, config] of Object.entries(game.cardSettings)) {
         baseCounts[val] = config.count;
@@ -314,32 +330,49 @@ function renderTracker() {
         });
     }
 
+    const circledNumbers = { 1:"①", 2:"②", 3:"③", 4:"④", 5:"⑤", 6:"⑥", 7:"⑦", 8:"⑧" };
+
     for (let i = 1; i <= 8; i++) {
         const total = baseCounts[i] || 0;
         const used = usedCounts[i] || 0;
         const remain = Math.max(0, total - used);
+        const info = game.cardSettings[i] || { name: "", desc: "" };
 
-        const item = document.createElement("div");
-        item.className = `tracker-item tracker-${i}`;
-        if (remain === 0 && total > 0) item.classList.add("used-up");
+        for (let k = 0; k < total; k++) {
+            const badge = document.createElement("div");
+            const isUsed = k >= remain;
 
-        let circles = "";
-        for (let j = 0; j < remain; j++) circles += "●";
-        for (let j = 0; j < used; j++) circles += "○";
+            badge.className = `tracker-item tracker-${i}`;
+            badge.style.position = "relative";
+            badge.style.display = "inline-flex";
+            badge.style.justifyContent = "center";
+            badge.style.alignItems = "center";
+            badge.style.width = "32px";
+            badge.style.height = "32px";
+            badge.style.borderRadius = "50%";
+            badge.style.fontSize = "1.2rem";
+            badge.style.fontWeight = "bold";
+            badge.style.cursor = "help";
 
-        item.style.display = "flex";
-        item.style.justify = "space-between";
-        item.style.alignItems = "center";
-        
-        item.innerHTML = `
-            <span class="tracker-name">${i}: ${game.cardSettings[i]?.name || ''} (残り${remain}枚)</span>
-            <span class="tracker-circles-container">${circles}</span>
-        `;
-        listEl.appendChild(item);
+            if (isUsed) {
+                badge.style.background = "#2c3e50";
+                badge.style.color = "#7f8c8d";
+                badge.style.opacity = "0.25";
+                badge.style.border = "1px dashed #7f8c8d";
+            }
+
+            badge.innerHTML = `
+                ${circledNumbers[i]}
+                <div class="card-tooltip" style="width:160px; font-weight:normal; bottom:125%; font-size:0.75rem;">
+                    <strong>【${i}: ${info.name}】</strong><br>${info.desc}
+                </div>
+            `;
+            listEl.appendChild(badge);
+        }
     }
 }
 
-// ホスト用：ゲームエリアにカスタム設定UIを差し込む
+// ⚙️ ホスト用：枚数カスタムUIの自動生成（ルール設定項目を追加）
 export function injectCustomSettingsUIIntoGame() {
     const gameContainer = document.getElementById("game-container");
     if (!gameContainer || document.getElementById("host-custom-settings")) return;
@@ -348,7 +381,28 @@ export function injectCustomSettingsUIIntoGame() {
     div.id = "host-custom-settings";
     div.className = "custom-card-settings";
     
-    let html = `<h3>⚙️ ルームカスタム設定 (ホストのみ変更可能)</h3>`;
+    let html = `<h3>⚙️ ルームカスタム設定 (ホスト権限)</h3>`;
+    
+    // 👑 ルール・枚数設定の追加
+    html += `
+        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-bottom: 12px; border: 1px solid #f1c40f;">
+            <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>
+            <div class="setting-item">
+                <span>最初の手札枚数:</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="cfg-first-draw" value="${game.drawSettings.firstTurnCount}" min="1" max="5">
+                </div>
+            </div>
+            <div class="setting-item">
+                <span>毎ターンのドロー枚数:</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="cfg-every-draw" value="${game.drawSettings.everyTurnCount}" min="1" max="3">
+                </div>
+            </div>
+        </div>
+        <h4 style="margin: 5px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>
+    `;
+
     for (let i = 1; i <= 8; i++) {
         html += `
             <div class="setting-item">
@@ -362,22 +416,34 @@ export function injectCustomSettingsUIIntoGame() {
     }
     div.innerHTML = html;
     
-    // ログボックスの上部に挿入
     const logBox = document.getElementById("log-box");
     gameContainer.insertBefore(div, logBox);
 
-    // インプット値変更のイベント検知
+    // イベントフック: 初手枚数
+    document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
+        game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);
+        broadcastState();
+        updateUI();
+    });
+
+    // イベントフック: ターン枚数
+    document.getElementById("cfg-every-draw")?.addEventListener("change", (e) => {
+        game.drawSettings.everyTurnCount = Math.max(1, parseInt(e.target.value) || 1);
+        broadcastState();
+        updateUI();
+    });
+
+    // イベントフック: 各カード
     for (let i = 1; i <= 8; i++) {
         document.getElementById(`cfg-count-${i}`)?.addEventListener("change", (e) => {
-            const newVal = parseInt(e.target.value) || 0;
-            game.cardSettings[i].count = newVal;
+            game.cardSettings[i].count = Math.max(0, parseInt(e.target.value) || 0);
             broadcastState();
             updateUI();
         });
     }
 }
 
-// ゲスト用：ホストの設定を画面に同期反映（書き換え不可スタイル）
+// 📋 ゲスト用：現在のホスト構成設定の同期表示
 export function syncGuestSettingsUI(cardSettings, drawSettings) {
     if (isHost) return;
 
@@ -392,7 +458,14 @@ export function syncGuestSettingsUI(cardSettings, drawSettings) {
         gameContainer.insertBefore(div, logBox);
     }
 
-    let html = `<h3>📋 現在のルームカード構成設定</h3>`;
+    let html = `<h3>📋 現在のルームカスタム設定</h3>`;
+    html += `
+        <div style="background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px; margin-bottom: 10px;">
+            <div class="setting-item"><span>最初の手札枚数:</span><input type="number" value="${drawSettings.firstTurnCount}" disabled style="width:50px; text-align:center;"></div>
+            <div class="setting-item"><span>毎ターンのドロー枚数:</span><input type="number" value="${drawSettings.everyTurnCount}" disabled style="width:50px; text-align:center;"></div>
+        </div>
+    `;
+
     for (let i = 1; i <= 8; i++) {
         const count = cardSettings[i]?.count ?? 0;
         html += `
@@ -408,7 +481,7 @@ export function syncGuestSettingsUI(cardSettings, drawSettings) {
     div.innerHTML = html;
 }
 
-// ホスト用：ゲーム強制中断ボタンの生成
+// ホスト用：ゲーム強制中断ボタン
 export function injectAbortButton() {
     const gameContainer = document.getElementById("game-container");
     if (!gameContainer || document.getElementById("abort-game-btn")) return;

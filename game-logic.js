@@ -3,7 +3,7 @@
 export const game = {
     isGameStarted: false,
     deck: [],
-    players: [], // { id, name, hand:[], alive, spectator, score, history:[], protected }
+    players: [], 
     turnIndex: 0,
     
     cardSettings: {
@@ -17,16 +17,18 @@ export const game = {
         8: { name: "女王", count: 1, desc: "このカードを何らかの理由で捨て札にしたら脱落。" }
     },
     
+    // 👑 カスタマイズ可能なドロー初期値
     drawSettings: {
         firstTurnCount: 1,
         everyTurnCount: 1
     },
 
-    // ラウンドの開始処理
+    // ラウンドの開始処理（バリデーション機能付き）
     initRound(rawPlayerList) {
         this.deck = [];
         let totalCards = 0;
 
+        // 設定された構成枚数からデッキを再計算
         for (const [val, config] of Object.entries(this.cardSettings)) {
             const count = Math.max(0, config.count);
             totalCards += count;
@@ -52,19 +54,21 @@ export const game = {
             return false;
         }
 
+        // 🔥 【検証】開始時必要枚数 = (初手枚数 × アクティブ人数) + ターン用最低1枚
         const requiredCards = activePlayers.length * this.drawSettings.firstTurnCount;
         if (totalCards < requiredCards + 1) {
-            this.log(`⚠️ カード総数不足 (${totalCards}枚)。初期配布に${requiredCards}枚＋山札残1枚以上必要です。`);
+            alert(`🚫 ゲームを開始できません！\n現在のカスタム設定では、初期手札として合計 ${requiredCards} 枚必要ですが、山札の総数が ${totalCards} 枚しかありません。カード枚数を増やすか設定を調整してください。`);
+            this.log(`❌ エラー: カード総数不足 (${totalCards}/${requiredCards + 1}枚)。ゲームをキャンセルしました。`);
             return false;
         }
         
-        // シャッフル
+        // フィッシャー〜イェーツのシャッフル
         for (let i = this.deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [this.deck[i], this.deck[j]] = [this.deck[j], this.deck[i]];
         }
 
-        // 初期手札配布
+        // 決定された初期枚数分配布
         for (let i = 0; i < this.drawSettings.firstTurnCount; i++) {
             activePlayers.forEach(p => {
                 if (this.deck.length > 0) p.hand.push(this.deck.pop());
@@ -73,7 +77,7 @@ export const game = {
 
         this.isGameStarted = true;
         this.turnIndex = 0;
-        this.log("🎮 ゲームラウンドが開始されました！");
+        this.log(`🎮 ゲーム開始! [初手: ${this.drawSettings.firstTurnCount}枚 / ターンドロー: ${this.drawSettings.everyTurnCount}枚]`);
         
         // 大臣(7)の初期バースト検証
         activePlayers.forEach(p => this.checkChancellorBurst(p));
@@ -92,22 +96,20 @@ export const game = {
             return;
         }
         
-        currentPlayer.protected = false; // 前回の僧侶効果を解除
+        currentPlayer.protected = false; 
         this.log(`🎲 ${currentPlayer.name} のターンです。`);
 
-        // カードドロー
+        // 設定された毎ターンドロー枚数分引く
         for (let i = 0; i < this.drawSettings.everyTurnCount; i++) {
             if (this.deck.length > 0) {
                 const drawn = this.deck.pop();
                 currentPlayer.hand.push(drawn);
                 
-                // 大臣(7)のバーストチェック
                 if (this.checkChancellorBurst(currentPlayer)) return;
             }
         }
     },
 
-    // ターンを次に進める
     nextTurn() {
         if (this.isGameEnded()) {
             this.endRound();
@@ -127,7 +129,6 @@ export const game = {
         }
     },
 
-    // カードをプレイしたときのメイン効果処理
     playCard(playerId, cardValue, target) {
         const player = this.players.find(p => p.id === playerId);
         if (!player) return;
@@ -138,7 +139,6 @@ export const game = {
 
         this.log(`🃏 ${player.name} が「${this.cardSettings[cardValue].name}(${cardValue})」を出しました。`);
 
-        // 女王(8)の自爆チェック
         if (cardValue === 8) {
             this.log(`💥 女王を捨てたため、${player.name} は脱落しました。`);
             this.eliminatePlayer(player);
@@ -148,19 +148,17 @@ export const game = {
 
         const targetPlayer = target && target.targetPlayerId ? this.players.find(p => p.id === target.targetPlayerId) : null;
 
-        // 僧侶による保護のチェック
         if (targetPlayer && targetPlayer.protected && targetPlayer.id !== player.id) {
             this.log(`🛡️ ${targetPlayer.name} は僧侶で守られているため、効果は不発に終わりました。`);
             this.nextTurn();
             return;
         }
 
-        // 各カードの効果
         switch (cardValue) {
-            case 1: // 兵士
+            case 1: 
                 if (targetPlayer) {
                     const guessed = parseInt(target.guessCardValue);
-                    const actual = targetPlayer.hand[0];
+                    const actual = targetPlayer.hand[0]; // 簡易ルール: 1枚目を対象とする
                     this.log(`[兵士] ${targetPlayer.name} の手札を「${this.cardSettings[guessed]?.name || guessed}」と予想。`);
                     if (actual === guessed) {
                         this.log(`🎯 的中！ ${targetPlayer.name} が脱落しました。`);
@@ -171,7 +169,7 @@ export const game = {
                 }
                 break;
 
-            case 2: // 道化
+            case 2: 
                 if (targetPlayer) {
                     this.log(`[道化] ${player.name} は ${targetPlayer.name} の手札を確認した。`);
                     if (window.myId === player.id) {
@@ -180,7 +178,7 @@ export const game = {
                 }
                 break;
 
-            case 3: // 騎士
+            case 3: 
                 if (targetPlayer) {
                     this.log(`[騎士] ${player.name} と ${targetPlayer.name} が手札を比較。`);
                     const myCard = player.hand[0] || 0;
@@ -197,12 +195,12 @@ export const game = {
                 }
                 break;
 
-            case 4: // 僧侶
+            case 4: 
                 player.protected = true;
                 this.log(`🛡️ ${player.name} は次の手番まで効果を受けません。`);
                 break;
 
-            case 5: // 魔術師
+            case 5: 
                 if (targetPlayer) {
                     const discarded = targetPlayer.hand.pop();
                     this.log(`[魔術師] ${targetPlayer.name} は手札「${this.cardSettings[discarded]?.name || discarded}」を捨てさせられた。`);
@@ -220,7 +218,7 @@ export const game = {
                 }
                 break;
 
-            case 6: // 将軍
+            case 6: 
                 if (targetPlayer) {
                     this.log(`[将軍] ${player.name} と ${targetPlayer.name} の手札を交換しました。`);
                     const temp = [...player.hand];
@@ -236,7 +234,6 @@ export const game = {
         this.nextTurn();
     },
 
-    // 大臣(7)の合計値12以上バースト判定
     checkChancellorBurst(p) {
         if (!p.alive || p.spectator) return false;
         if (p.hand.includes(7)) {
@@ -290,7 +287,6 @@ export const game = {
             this.log("生存者がいないため引き分けです。");
         }
 
-        // UI切り替え
         const startBtn = document.getElementById("start-game-btn");
         const nextBtn = document.getElementById("next-round-btn");
         if (startBtn) startBtn.style.display = "none";

@@ -4,8 +4,8 @@ import { updateUI, syncGuestSettingsUI } from "./ui-manager.js";
 
 export let isHost = false;
 export let rawPlayerList = []; 
-export let guestConnections = []; // ホスト用: 接続されたconnの配列
-export let connToHost = null;     // ゲスト用: ホストへのconn
+export let guestConnections = []; 
+export let connToHost = null;     
 
 export function setIsHost(val) { isHost = val; }
 export function setRawPlayerList(list) { rawPlayerList = list; }
@@ -16,15 +16,12 @@ export function setConnections(conn) {
 }
 export function setConnToHost(conn) { connToHost = conn; }
 
-// ホストがデータを受信した時の処理
 export function handleHostReceiveData(conn, data) {
     if (!isHost) return;
 
     switch (data.type) {
         case "JOIN":
-            // すでにゲームが始まっている場合は観戦者として追加
             const isSpectator = game.isGameStarted;
-            // 重複チェック
             if (!rawPlayerList.some(p => p.id === data.id)) {
                 rawPlayerList.push({
                     id: data.id,
@@ -39,7 +36,6 @@ export function handleHostReceiveData(conn, data) {
             break;
 
         case "ACTION":
-            // ゲストからのカードプレイ要求
             if (!game.isGameStarted) return;
             const currentPlayer = game.players[game.turnIndex];
             if (currentPlayer && currentPlayer.id === data.playerId) {
@@ -55,12 +51,10 @@ export function handleHostReceiveData(conn, data) {
     }
 }
 
-// ゲストがデータを受信した時の処理
 export function handleGuestReceiveData(data) {
     if (isHost) return;
 
     if (data.type === "SYNC_STATE") {
-        // ゲーム状態の同期
         game.isGameStarted = data.gameState.isGameStarted;
         game.deck = data.gameState.deck;
         game.players = data.gameState.players;
@@ -68,7 +62,6 @@ export function handleGuestReceiveData(data) {
         game.cardSettings = data.gameState.cardSettings;
         game.drawSettings = data.gameState.drawSettings;
 
-        // グローバルに同期メンバーリストも更新
         rawPlayerList = game.players.map(p => ({
             id: p.id,
             name: p.name,
@@ -76,13 +69,11 @@ export function handleGuestReceiveData(data) {
             score: p.score
         }));
 
-        // UI設定エリアへの同期（ゲスト用）
         syncGuestSettingsUI(data.gameState.cardSettings, data.gameState.drawSettings);
         updateUI();
     }
 }
 
-// プレイヤー切断時の共通処理
 function handlePlayerDisconnect(peerId) {
     const leftPlayer = rawPlayerList.find(p => p.id === peerId);
     if (leftPlayer) {
@@ -91,7 +82,6 @@ function handlePlayerDisconnect(peerId) {
     rawPlayerList = rawPlayerList.filter(p => p.id !== peerId);
     guestConnections = guestConnections.filter(c => c.peer !== peerId);
 
-    // ゲーム中のプレイヤーであれば脱落処理
     if (game.isGameStarted) {
         const pInGame = game.players.find(p => p.id === peerId);
         if (pInGame) {
@@ -107,7 +97,6 @@ function handlePlayerDisconnect(peerId) {
     updateUI();
 }
 
-// ホストから全ゲストへ状態をブロードキャスト
 export function broadcastState() {
     if (!isHost) return;
 
@@ -130,7 +119,6 @@ export function broadcastState() {
     });
 }
 
-// ホスト用：プレイヤーのキック
 export function hostKickPlayer(peerId) {
     if (!isHost) return;
     const conn = guestConnections.find(c => c.peer === peerId);
@@ -140,13 +128,11 @@ export function hostKickPlayer(peerId) {
     handlePlayerDisconnect(peerId);
 }
 
-// ホスト用：ホスト権限の譲渡（簡易リロード誘導）
 export function hostTransferAuthority(peerId) {
     if (!isHost) return;
     alert("ホスト権限の移行には、対象プレイヤーに新しく部屋を作成してもらい、再入室することをおすすめします。");
 }
 
-// 部屋を離脱
 export function leaveRoom() {
     if (isHost) {
         guestConnections.forEach(conn => {
