@@ -1,717 +1,383 @@
-const CARD_DATA = {
-    1: { name: "兵士", effect: "相手を指名し手札を予想。当たれば脱落させる" },
-    2: { name: "僧侶", effect: "次の自分の手番まで効果を受けない" },
-    3: { name: "騎士", effect: "相手と手札を比較し、低い方を脱落させる" },
-    4: { name: "魔術師", effect: "相手の手札を捨てさせ、1枚引かせる" },
-    5: { name: "将軍", effect: "相手と手札を交換する" },
-    8: { name: "姫", effect: "手札から捨てると即脱落する" }
-};
+/**
+ * アークライト公式『ラブレター』ルール準拠 
+ * 人数無制限＆カード枚数カスタマイズ対応 ゲーム管理クラス
+ */
+class LoveLetterCustomGame {
+    constructor() {
+        // デフォルトのカード設定（公式ルール準拠）
+        this.cardSettings = {
+            1: { name: "兵士", value: 1, count: 5, desc: "他プレイヤー1人の手札を予測（兵士以外）。的中すれば脱落。" },
+            2: { name: "僧侶", value: 2, count: 2, desc: "次の自分の手番まで、自分へのカード効果を無効化する。" },
+            3: { name: "騎士", value: 3, count: 2, desc: "他プレイヤー1人と手札を比較。数字が小さい方が脱落。" },
+            4: { name: "魔術師", value: 4, count: 2, desc: "自分含む1人を指名。手札を捨てさせ山札から1枚引かせる。" },
+            5: { name: "将軍", value: 5, count: 2, desc: "他プレイヤー1人を指名し、お互いの手札を交換する。" },
+            6: { name: "大臣", value: 6, count: 1, desc: "手札に入った時点で、もう1枚との合計が12以上なら即脱落。" },
+            7: { name: "公爵", value: 7, count: 1, desc: "効果なし。ただし、4(魔術師)か5(将軍)と同時に持つと強制廃棄。" },
+            8: { name: "姫", value: 8, count: 1, desc: "このカードを捨てる、または捨てさせられた場合、即脱落。" }
+        };
 
-const CARD_COUNTS = { 1: 5, 2: 2, 3: 2, 4: 2, 5: 1, 8: 1 };
-const ORIGINAL_DECK = [1,1,1,1,1, 2,2, 3,3, 4,4, 5, 8]; 
-const WINNING_SCORE = 3; 
-
-let peer = null;
-let connections = []; 
-let connToHost = null; 
-let isHost = false;
-let myId = "";
-let myName = "";
-let currentHostId = ""; 
-
-let gameState = {
-    started: false,
-    roundOver: false, 
-    matchOver: false, 
-    deck: [],
-    players: [], // { peerId, name, hand:[], playedCards:[], alive:true, protected:false, score:0 }
-    turnIndex: 0,
-    logs: [],
-    hostPeerId: "" 
-};
-
-const customRoomId = String(Math.floor(10000000 + Math.random() * 90000000));
-
-peer = new Peer(customRoomId, {
-    config: { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] }
-});
-
-peer.on('open', (id) => {
-    myId = id;
-    document.getElementById('my-peer-id').innerText = `あなたの部屋ID: ${id} (タップでコピー)`;
-});
-
-peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-        alert("部屋IDがすでに使われていました。ページを再読み込みしてください。");
-    } else {
-        alert("通信エラーが発生しました: " + err.type);
+        this.deck = [];
+        this.removedCard = null; // 脇に置く裏向きの1枚
+        this.faceUpCards = [];   // 2〜3人プレイ時に表向きで公開されるカード
+        this.players = [];       // { id, name, hand:[], alive:true, protected:false, history:[], score:0 }
+        this.turnIndex = 0;
+        this.isGameStarted = false;
     }
-    console.error(err);
-});
 
-document.getElementById('my-peer-id').onclick = () => {
-    navigator.clipboard.writeText(myId);
-    alert("部屋IDをコピーしました！友達に送ってください。");
-};
+    /**
+     * ホスト用：ゲーム開始前に特定のカード枚数を変更する
+     * @param {number} cardValue - 1〜8のカード番号
+     * @param {number} newCount - 新しい枚数 (0以上)
+     */
+    updateCardCount(cardValue, newCount) {
+        if (this.isGameStarted) {
+            console.warn("ゲーム開始後はカード枚数を変更できません。");
+            return false;
+        }
+        if (this.cardSettings[cardValue] && newCount >= 0) {
+            this.cardSettings[cardValue].count = Number(newCount);
+            return true;
+        }
+        return false;
+    }
 
-function beHost() {
-    isHost = true;
-    currentHostId = myId;
-    gameState.hostPeerId = myId;
-    myName = document.getElementById('name-input').value;
-    gameState.players = [{ peerId: myId, name: myName, hand: [], playedCards: [], alive: true, protected: false, score: 0 }];
-    
-    document.getElementById('setup-container').style.display = 'none';
-    document.getElementById('game-container').style.display = 'block';
-    setupHostConnectionListener();
-    
-    pushLog(`[部屋作成] 部屋（ID: ${myId}）を作成しました。参加者を待っています...`);
-    updateUI();
-}
+    /**
+     * ゲーム（ラウンド）の初期化
+     * @param {Array} playerList - 参加プレイヤーのリスト [{id: "xxx", name: "プレイヤーA"}]
+     */
+    initRound(playerList) {
+        if (playerList.length < 2) {
+            this.log("エラー: ゲームを開始するには2人以上のプレイヤーが必要です。");
+            return false;
+        }
 
-function setupHostConnectionListener() {
-    peer.on('connection', (conn) => {
-        if (gameState.started) {
-            setTimeout(() => { conn.send({ type: 'KICK', msg: '[システム] すでにゲームが開始されています。' }); }, 500);
+        // 1. カスタマイズされた設定からデッキを構築
+        this.deck = [];
+        for (const [value, config] of Object.entries(this.cardSettings)) {
+            for (let i = 0; i < config.count; i++) {
+                this.deck.push(Number(value));
+            }
+        }
+
+        // デッキ枚数が足りるか最低限のチェック（人数 + 脇置き分など）
+        const minRequired = playerList.length + (playerList.length < 4 ? 4 : 1);
+        if (this.deck.length < minRequired) {
+            this.log(`エラー: カードの総枚数(${this.deck.length}枚)が足りません。設定を増やしてください。`);
+            return false;
+        }
+
+        // シャッフル
+        this.shuffle(this.deck);
+
+        // 2. プレイヤーの初期化（既存のスコアは引き継ぐ）
+        this.players = playerList.map(p => {
+            const existing = this.players.find(ep => ep.id === p.id);
+            return {
+                id: p.id,
+                name: p.name,
+                hand: [],
+                alive: true,
+                protected: false,
+                history: [],
+                score: existing ? existing.score : 0
+            };
+        });
+
+        // 3. 【公式ルール】カードを除外する処理
+        // 全人数共通：山札の上から1枚を裏向きのまま脇に置く
+        this.removedCard = this.deck.pop();
+
+        // 2〜3人プレイの場合、山札から3枚を「表向き」で脇に置く（4人以上は0枚）
+        this.faceUpCards = [];
+        if (this.players.length < 4) {
+            for (let i = 0; i < 3; i++) {
+                this.faceUpCards.push(this.deck.pop());
+            }
+        }
+
+        // 4. 各プレイヤーに初期手札を1枚ずつ配布
+        for (let player of this.players) {
+            player.hand.push(this.deck.pop());
+            // 初期手札での大臣(6)バーストチェック
+            this.checkChancellorBurst(player);
+        }
+
+        this.turnIndex = 0;
+        this.isGameStarted = true;
+        this.log("=== ラブレターが開始されました ===");
+        
+        this.startTurn();
+        return true;
+    }
+
+    /**
+     * 手番開始処理
+     */
+    startTurn() {
+        let currentPlayer = this.players[this.turnIndex];
+
+        // 脱落しているプレイヤーならスキップして次へ
+        if (!currentPlayer.alive) {
+            this.nextTurn();
             return;
         }
-        connections.push(conn);
-        conn.on('data', (data) => handleDataFromGuest(data, conn));
-        conn.on('close', () => handleDisconnect(conn.peer));
-    });
-}
 
-function joinRoom() {
-    const hostId = document.getElementById('room-id-input').value.trim();
-    if(!hostId) return alert("ホストの8桁の部屋IDを入力してください");
-    
-    const joinBtn = document.getElementById('join-btn');
-    joinBtn.innerText = "接続確認中...";
-    joinBtn.disabled = true;
+        // 僧侶のプロテクト効果を自分のターン開始時に解除
+        currentPlayer.protected = false;
 
-    let isConnectedSuccessfully = false;
-    const testConn = peer.connect(hostId);
-    
-    const timeout = setTimeout(() => {
-        if (!isConnectedSuccessfully) {
-            testConn.close();
-            alert("[エラー] 指定された部屋はまだ開かれていないか、存在しません。\nホストが「部屋を作る」を押したことを確認してください。");
-            joinBtn.innerText = "子（ゲスト）として参加する";
-            joinBtn.disabled = false;
-        }
-    }, 3000);
+        // 山札の確認
+        if (this.deck.length > 0) {
+            // カードを1枚ドローして手札を2枚にする
+            const drawnCard = this.deck.pop();
+            currentPlayer.hand.push(drawnCard);
+            this.log(`${currentPlayer.name}のターン。カードを1枚引きました。`);
 
-    testConn.on('open', () => {
-        isConnectedSuccessfully = true;
-        clearTimeout(timeout);
-        testConn.close(); 
-        
-        myName = document.getElementById('name-input').value;
-        currentHostId = hostId;
-        connectToHostId(hostId);
-        
-        joinBtn.innerText = "子（ゲスト）として参加する";
-        joinBtn.disabled = false;
-    });
-
-    testConn.on('error', (err) => {
-        clearTimeout(timeout);
-        alert("[エラー] 指定された部屋に接続できません。部屋IDが正しいか確認してください。");
-        joinBtn.innerText = "子（ゲスト）として参加する";
-        joinBtn.disabled = false;
-    });
-}
-
-function connectToHostId(hostId) {
-    if(connToHost) { connToHost.close(); }
-    
-    connToHost = peer.connect(hostId);
-    
-    connToHost.on('open', () => {
-        document.getElementById('setup-container').style.display = 'none';
-        document.getElementById('game-container').style.display = 'block';
-        connToHost.send({ type: 'JOIN', name: myName });
-    });
-    
-    connToHost.on('data', (data) => {
-        if (data.type === 'SYNC') {
-            gameState = data.state;
-            currentHostId = gameState.hostPeerId;
-            if (gameState.hostPeerId === myId && !isHost) {
-                becomeNewHost();
-            }
-            updateUI();
-        }
-        if (data.type === 'ALERT') alert(data.msg);
-        if (data.type === 'KICK') {
-            alert(data.msg || "部屋から退出させられました。");
-            resetToSetup();
-        }
-    });
-
-    connToHost.on('close', () => {
-        setTimeout(() => {
-            if (!isHost && currentHostId === gameState.hostPeerId) {
-                handleHostFailure();
-            }
-        }, 1500);
-    });
-}
-
-function becomeNewHost() {
-    isHost = true;
-    connToHost = null;
-    pushLog(`[システム] あなたが新しいホスト（部屋の主）になりました。`);
-    connections = [];
-    setupHostConnectionListener();
-    broadcastState();
-}
-
-function transferHost(targetPeerId, targetName) {
-    if (!isHost) return;
-    if (confirm(`${targetName} さんにホスト権限を渡しますか？`)) {
-        pushLog(`[ホスト交代] ${myName} から ${targetName} へホスト権限が譲渡されました。`);
-        gameState.hostPeerId = targetPeerId;
-        
-        isHost = false;
-        connections = [];
-        
-        broadcastState();
-        setTimeout(() => {
-            connectToHostId(targetPeerId);
-        }, 500);
-    }
-}
-
-function handleHostFailure() {
-    const oldHostId = gameState.hostPeerId;
-    gameState.players = gameState.players.filter(p => p.peerId !== oldHostId);
-    
-    if (gameState.players.length === 0) {
-        alert("部屋の接続が完全に切れました。");
-        resetToSetup();
-        return;
-    }
-    
-    const nextHost = gameState.players[0];
-    gameState.hostPeerId = nextHost.peerId;
-    pushLog(`[ホスト交代] 元のホストが切断したため、${nextHost.name} が新しいホストになります。`);
-    
-    if (nextHost.peerId === myId) {
-        becomeNewHost();
-    } else {
-        connectToHostId(nextHost.peerId);
-    }
-}
-
-function resetToSetup() {
-    isHost = false;
-    gameState.started = false;
-    gameState.roundOver = false;
-    gameState.matchOver = false;
-    gameState.players = [];
-    if(connToHost) { connToHost.close(); connToHost = null; }
-    connections.forEach(c => c.close());
-    connections = [];
-    document.getElementById('setup-container').style.display = 'block';
-    document.getElementById('game-container').style.display = 'none';
-    document.getElementById('role-display').innerText = "-";
-}
-
-function kickPlayer(targetPeerId, targetName) {
-    if (!isHost) return;
-    if (confirm(`${targetName} さんをキックしますか？`)) {
-        const connIdx = connections.findIndex(c => c.peer === targetPeerId);
-        if (connIdx !== -1) {
-            connections[connIdx].send({ type: 'KICK', msg: 'ホストによってキックされました。' });
-            connections[connIdx].close();
-            connections.splice(connIdx, 1);
-        }
-        gameState.players = gameState.players.filter(p => p.peerId !== targetPeerId);
-        pushLog(`[退室] ${targetName} がホストによってキックされました。`);
-        if (gameState.started) {
-            if (gameState.turnIndex >= gameState.players.length) {
-                gameState.turnIndex = 0;
-            }
-        }
-        broadcastState();
-    }
-}
-
-function handleDisconnect(peerId) {
-    const player = gameState.players.find(p => p.peerId === peerId);
-    if (player) {
-        pushLog(`[切断] ${player.name} の接続が切れました。`);
-        if (gameState.started) {
-            player.alive = false; 
-        } else {
-            gameState.players = gameState.players.filter(p => p.peerId !== peerId); 
-        }
-        connections = connections.filter(c => c.peer !== peerId);
-        broadcastState();
-    }
-}
-
-function handleDataFromGuest(data, conn) {
-    if (data.type === 'JOIN') {
-        if(!gameState.players.some(p => p.peerId === conn.peer)) {
-            gameState.players.push({ peerId: conn.peer, name: data.name, hand: [], playedCards: [], alive: true, protected: false, score: 0 });
-            pushLog(`[参加] ${data.name} が参加しました。`);
-        }
-        if (!connections.some(c => c.peer === conn.peer)) {
-            connections.push(conn);
-        }
-        broadcastState();
-    }
-    if (data.type === 'ACTION') {
-        resolveAction(data.action);
-    }
-}
-
-function broadcastState() {
-    if (!isHost) return;
-    connections.forEach(conn => {
-        if(conn.open) conn.send({ type: 'SYNC', state: gameState });
-    });
-    updateUI();
-}
-
-function pushLog(msg) {
-    gameState.logs.push(msg);
-    if(gameState.logs.length > 20) gameState.logs.shift();
-}
-
-function hostStartGame() {
-    if(gameState.players.length < 2) return alert("2人以上いないと始められません！");
-    gameState.players.forEach(p => p.score = 0);
-    gameState.matchOver = false;
-    startNewRound();
-}
-
-function startNewRound() {
-    gameState.started = true;
-    gameState.roundOver = false;
-    gameState.deck = [...ORIGINAL_DECK].sort(() => Math.random() - 0.5);
-    gameState.deck.pop(); 
-    
-    gameState.players.forEach(p => {
-        p.hand = [gameState.deck.pop()];
-        p.playedCards = []; 
-        p.alive = true;
-        p.protected = false;
-    });
-    
-    gameState.turnIndex = 0;
-    pushLog(`[開始] ラウンドが開始されました！(3点先取)`);
-    broadcastState();
-}
-
-function hostNextRound() {
-    if(!isHost || !gameState.roundOver || gameState.matchOver) return;
-    startNewRound();
-}
-
-function hostResetEntireGame() {
-    if(!isHost) return;
-    gameState.started = false;
-    gameState.roundOver = false;
-    gameState.matchOver = false;
-    gameState.players.forEach(p => {
-        p.score = 0;
-        p.hand = [];
-        p.playedCards = [];
-        p.alive = true;
-    });
-    pushLog("[リセット] ゲームが完全にリセットされました。");
-    broadcastState();
-}
-
-function startTurn() {
-    const alivePlayers = gameState.players.filter(p => p.alive);
-    if (alivePlayers.length <= 1 || gameState.deck.length === 0) {
-        endGame();
-        return;
-    }
-
-    const currentPlayer = gameState.players[gameState.turnIndex];
-    if (!currentPlayer.alive) {
-        nextTurn();
-        return;
-    }
-
-    currentPlayer.protected = false;
-    currentPlayer.hand.push(gameState.deck.pop());
-    broadcastState();
-}
-
-function nextTurn() {
-    if (gameState.roundOver) return; 
-    gameState.turnIndex = (gameState.turnIndex + 1) % gameState.players.length;
-    startTurn();
-}
-
-function updateUI() {
-    const logBox = document.getElementById("log-box");
-    logBox.innerHTML = gameState.logs.map(l => `<div>${l}</div>`).join('');
-    logBox.scrollTop = logBox.scrollHeight;
-
-    document.getElementById("deck-count").innerText = `山札: ${gameState.deck ? gameState.deck.length : 0}枚`;
-
-    if (isHost) {
-        document.getElementById('role-display').innerText = `部屋の主 (部屋ID: ${gameState.hostPeerId || myId})`;
-    } else {
-        document.getElementById('role-display').innerText = `ゲスト参加中 (部屋ID: ${currentHostId})`;
-    }
-
-    const totalUsedCounts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 8: 0 };
-    gameState.players.forEach(p => {
-        if(p.playedCards) {
-            p.playedCards.forEach(cNum => { totalUsedCounts[cNum]++; });
-        }
-    });
-
-    const listEl = document.getElementById("player-list");
-    listEl.innerHTML = "";
-    
-    gameState.players.forEach((p, idx) => {
-        const isCurrent = idx === gameState.turnIndex && gameState.started && !gameState.roundOver;
-        let statusText = p.alive ? "生存" : "脱落";
-        if (p.protected) statusText += " (ガード状態)";
-
-        const hostMark = (p.peerId === gameState.hostPeerId) ? "👑" : "";
-
-        const item = document.createElement("div");
-        item.className = `player-item ${isCurrent ? 'active' : ''} ${(!p.alive && gameState.started) ? 'eliminated' : ''}`;
-        
-        const header = document.createElement("div");
-        header.className = "player-header";
-        
-        const infoSpan = document.createElement("span");
-        infoSpan.innerHTML = `<strong>${hostMark}${p.name}</strong> ${p.peerId === myId ? '<span style="color:#2ecc71;">(あなた)</span>' : ''}
-                              <span class="score-badge">${p.score}pt</span>
-                              <span style="margin-left:10px; font-size:0.8rem; color:#bdc3c7;">[${statusText}]</span>`;
-        header.appendChild(infoSpan);
-
-        const actionBtnContainer = document.createElement("div");
-        if (isHost && p.peerId !== myId) {
-            const transBtn = document.createElement("button");
-            transBtn.className = "btn-host-transfer";
-            transBtn.innerText = "👑譲渡";
-            transBtn.onclick = () => transferHost(p.peerId, p.name);
-            actionBtnContainer.appendChild(transBtn);
-
-            if(!gameState.started) {
-                const kickBtn = document.createElement("button");
-                kickBtn.className = "btn-danger";
-                kickBtn.innerText = "キック";
-                kickBtn.onclick = () => kickPlayer(p.peerId, p.name);
-                actionBtnContainer.appendChild(kickBtn);
-            }
-        }
-        header.appendChild(actionBtnContainer);
-        item.appendChild(header);
-
-        if (gameState.started && !gameState.roundOver && p.alive) {
-            const handContainer = document.createElement("div");
-            handContainer.className = "enemy-hand-container";
-            
-            const handSize = p.hand ? p.hand.length : 0;
-            for(let i = 0; i < handSize; i++) {
-                const cardBack = document.createElement("div");
-                cardBack.className = "card-back";
-                handContainer.appendChild(cardBack);
-            }
-            item.appendChild(handContainer);
-        }
-
-        const historyContainer = document.createElement("div");
-        historyContainer.className = "played-history";
-        
-        if (p.playedCards && p.playedCards.length > 0) {
-            p.playedCards.forEach(cNum => {
-                const hCard = document.createElement("div");
-                hCard.className = "history-card";
-                hCard.innerHTML = `
-                    <div>${cNum}</div>
-                    <div class="h-name">${CARD_DATA[cNum].name}</div>
-                    <div class="card-tooltip"><strong>【${CARD_DATA[cNum].name}】</strong><br>${CARD_DATA[cNum].effect}</div>
-                `;
-                historyContainer.appendChild(hCard);
-            });
-        } else {
-            historyContainer.innerHTML = `<span style="font-size:0.75rem; color:#7f8c8d; padding-left:5px;">まだカードを出していません</span>`;
-        }
-        item.appendChild(historyContainer);
-
-        listEl.appendChild(item);
-    });
-
-    if (isHost) {
-        if (!gameState.started && !gameState.roundOver) {
-            document.getElementById('start-game-btn').style.display = 'block';
-            document.getElementById('next-round-btn').style.display = 'none';
-            document.getElementById('reset-game-btn').style.display = 'none';
-        } else if (gameState.roundOver) {
-            document.getElementById('start-game-btn').style.display = 'none';
-            if (gameState.matchOver) {
-                document.getElementById('next-round-btn').style.display = 'none';
-                document.getElementById('reset-game-btn').style.display = 'block';
-            } else {
-                document.getElementById('next-round-btn').style.display = 'block';
-                document.getElementById('reset-game-btn').style.display = 'block';
+            // 【大臣(6)のルール】手札2枚の合計が12以上なら即座に脱落
+            if (this.checkChancellorBurst(currentPlayer)) {
+                this.log(`${currentPlayer.name}は【大臣】の効果（手札合計12以上）により即座に脱落した。`);
+                this.checkRoundEndConditions();
+                return;
             }
         } else {
-            document.getElementById('start-game-btn').style.display = 'none';
-            document.getElementById('next-round-btn').style.display = 'none';
-            document.getElementById('reset-game-btn').style.display = 'none';
+            // 山札がなくなったらラウンド終了（強さ比較へ）
+            this.endRound();
+            return;
         }
-    } else {
-        document.getElementById('start-game-btn').style.display = 'none';
-        document.getElementById('next-round-btn').style.display = 'none';
-        document.getElementById('reset-game-btn').style.display = 'none';
     }
 
-    const cardArea = document.getElementById("card-area");
-    cardArea.innerHTML = "";
-    const me = gameState.players.find(p => p.peerId === myId);
-    
-    if (me && me.alive && gameState.started && !gameState.roundOver) {
-        document.getElementById("hand-title").style.display = "block";
-        const isMyTurn = gameState.players[gameState.turnIndex].peerId === myId;
-        
-        me.hand.forEach((cardNum, idx) => {
-            const card = CARD_DATA[cardNum];
-            const cardEl = document.createElement("div");
-            cardEl.className = "card";
-            cardEl.innerHTML = `
-                <div class="card-num">${cardNum}</div>
-                <div class="card-name">${card.name}</div>
-                <div class="card-tooltip"><strong>【${card.name}】</strong><br>${card.effect}</div>
-            `;
-            
-            if (isMyTurn) {
-                cardEl.onclick = () => selectCard(idx, cardNum);
-            } else {
-                cardEl.style.opacity = "0.7";
-                cardEl.style.cursor = "not-allowed";
-            }
-            cardArea.appendChild(cardEl);
-        });
-    } else {
-        document.getElementById("hand-title").style.display = "none";
-    }
+    /**
+     * カードを使用する（プレイする）処理
+     * @param {string} playerId - 行動したプレイヤーID
+     * @param {number} cardValue - 出したカードの数値(1~8)
+     * @param {Object} target - 対象指定情報 { targetPlayerId, guessCardValue }
+     */
+    playCard(playerId, cardValue, target = {}) {
+        let player = this.players.find(p => p.id === playerId);
+        if (!player || !player.alive) return;
 
-    const trackerListEl = document.getElementById("card-tracker-list");
-    trackerListEl.innerHTML = "";
-    
-    [1, 2, 3, 4, 5, 8].forEach(cNum => {
-        const usedCount = totalUsedCounts[cNum];
-        const maxCount = CARD_COUNTS[cNum];
-        const isUsedUp = usedCount >= maxCount;
+        // 手札からカードを消費し履歴に追加
+        const cardIdx = player.hand.indexOf(cardValue);
+        if (cardIdx === -1) return; // 不正な選択防止
+        player.hand.splice(cardIdx, 1);
+        player.history.push(cardValue);
 
-        const trackerItem = document.createElement("div");
-        trackerItem.className = `tracker-item ${isUsedUp ? 'used-up' : ''}`;
-        
-        trackerItem.innerHTML = `
-            <div class="tracker-num">${cNum}</div>
-            <div class="tracker-name">${CARD_DATA[cNum].name}</div>
-            <div class="tracker-count">${usedCount} / ${maxCount}</div>
-            <div class="card-tooltip"><strong>${CARD_DATA[cNum].name}</strong><br>${CARD_DATA[cNum].effect}</div>
-        `;
-        trackerListEl.appendChild(trackerItem);
-    });
-}
+        let targetPlayer = this.players.find(p => p.id === target.targetPlayerId);
 
-function selectCard(handIdx, cardNum) {
-    if (cardNum === 8 || cardNum === 2) { 
-        sendAction({ type: 'PLAY', card: cardNum, targetId: null });
-        return;
-    }
-    showTargetModal(cardNum);
-}
+        this.log(`${player.name}が【${this.cardSettings[cardValue].name}】を場に出した。`);
 
-function showTargetModal(cardNum) {
-    const modal = document.getElementById("target-modal");
-    const btnContainer = document.getElementById("target-buttons");
-    btnContainer.innerHTML = "";
-    
-    gameState.players.forEach((p, idx) => {
-        if (p.peerId !== myId && p.alive && !p.protected) {
-            const btn = document.createElement("button");
-            btn.innerText = p.name;
-            btn.onclick = () => {
-                modal.style.display = "none";
-                if (cardNum === 1) {
-                    guessCard(p.peerId);
-                } else {
-                    sendAction({ type: 'PLAY', card: cardNum, targetId: p.peerId });
+        // 対象が自分以外かつ僧侶(2)で守られている場合は効果無効化
+        if (targetPlayer && targetPlayer.protected && player.id !== targetPlayer.id) {
+            this.log(`${targetPlayer.name}は僧侶に守られているため、効果は不発に終わった。`);
+            this.checkRoundEndConditions();
+            return;
+        }
+
+        // カード固有の効果処理
+        switch(cardValue) {
+            case 1: // 兵士
+                if (!targetPlayer || target.guessCardValue === 1) {
+                    this.log("対象が不正、または兵士を予測することはできません。");
+                    break;
                 }
-            };
-            btnContainer.appendChild(btn);
-        }
-    });
-
-    if(btnContainer.innerHTML === "") {
-        const btn = document.createElement("button");
-        btn.innerText = "対象なし (不発)";
-        btn.onclick = () => { modal.style.display = "none"; sendAction({ type: 'PLAY', card: cardNum, targetId: null }); };
-        btnContainer.appendChild(btn);
-    }
-    modal.style.display = "flex";
-}
-
-function guessCard(targetId) {
-    const modal = document.getElementById("target-modal");
-    const btnContainer = document.getElementById("target-buttons");
-    btnContainer.innerHTML = "<h3>手札の数字を予想：</h3>";
-    
-    [2, 3, 4, 5, 8].forEach(num => {
-        const btn = document.createElement("button");
-        btn.innerText = `${num}: ${CARD_DATA[num].name}`;
-        btn.onclick = () => {
-            modal.style.display = "none";
-            sendAction({ type: 'PLAY', card: 1, targetId: targetId, guess: num });
-        };
-        btnContainer.appendChild(btn);
-    });
-    modal.style.display = "flex";
-}
-
-function sendAction(action) {
-    if (isHost) {
-        resolveAction(action);
-    } else {
-        if(connToHost && connToHost.open) {
-            connToHost.send({ type: 'ACTION', action: action });
-        } else {
-            alert("ホストとの通信が切れているため行動できません。");
-        }
-    }
-}
-
-function resolveAction(action) {
-    if (gameState.roundOver) return;
-
-    const attacker = gameState.players[gameState.turnIndex];
-    const cardIdx = attacker.hand.indexOf(action.card);
-    attacker.hand.splice(cardIdx, 1);
-    
-    if(!attacker.playedCards) attacker.playedCards = [];
-    attacker.playedCards.push(action.card);
-    
-    pushLog(`[プレイ] ${attacker.name} が 【${CARD_DATA[action.card].name}】 を使用。`);
-
-    const target = gameState.players.find(p => p.peerId === action.targetId);
-
-    if (action.card === 8) { 
-        pushLog(`[脱落] ${attacker.name} は姫を捨てたため脱落した！`);
-        attacker.alive = false;
-    }
-    else if (action.card === 2) { 
-        attacker.protected = true;
-        pushLog(`[効果] ${attacker.name} は次の手番まで守られます。`);
-    }
-    else if (target && target.alive) {
-        if (action.card === 1) { 
-            pushLog(`[予想] ${attacker.name} は ${target.name} の手札を [${action.guess}] と予想。`);
-            if (target.hand[0] === action.guess) {
-                pushLog(`[的中] 当たり！ ${target.name} が脱落。`);
-                target.alive = false;
-                target.playedCards.push(target.hand[0]);
-                target.hand = [];
-            } else {
-                pushLog("[結果] ハズレ！ 効果はありません。");
-            }
-        }
-        else if (action.card === 3) { 
-            pushLog(`[対決] ${attacker.name} と ${target.name} が騎士で対決！`);
-            const p1 = attacker.hand[0];
-            const p2 = target.hand[0];
-            if (p1 > p2) {
-                pushLog(`[結果] ${attacker.name} の勝利！ ${target.name} が脱落。`);
-                target.alive = false;
-                target.playedCards.push(target.hand[0]);
-                target.hand = [];
-            } else if (p1 < p2) {
-                pushLog(`[結果] ${target.name} の勝利！ ${attacker.name} が脱落。`);
-                attacker.alive = false;
-                attacker.playedCards.push(attacker.hand[0]);
-                attacker.hand = [];
-            } else {
-                pushLog("[結果] 引き分け！");
-            }
-        }
-        else if (action.card === 4) { 
-            if (target.hand.length > 0) {
-                const discardedCard = target.hand[0];
-                pushLog(`[効果] ${target.name} は手札【${CARD_DATA[discardedCard].name}】を捨てさせられた。`);
-                target.playedCards.push(discardedCard);
-                target.hand = [];
-                
-                if (discardedCard === 8) {
-                    pushLog(`[脱落] 姫が捨てられた！ ${target.name} は脱落。`);
-                    target.alive = false;
+                if (targetPlayer.hand[0] === target.guessCardValue) {
+                    this.log(`的中！ ${targetPlayer.name}の手札は【${this.cardSettings[target.guessCardValue].name}】だった。`);
+                    targetPlayer.alive = false;
+                    this.handleDiscardEffects(targetPlayer, targetPlayer.hand[0]);
                 } else {
-                    if (gameState.deck.length > 0) {
-                        target.hand.push(gameState.deck.pop());
+                    this.log(`ハズレ！ ${targetPlayer.name}の手札は【${this.cardSettings[target.guessCardValue].name}】ではなかった。`);
+                }
+                break;
+
+            case 2: // 僧侶
+                player.protected = true;
+                this.log(`${player.name}は次の自分の手番まで守られる。`);
+                break;
+
+            case 3: // 騎士
+                if (!targetPlayer) break;
+                this.log(`${player.name}と${targetPlayer.name}が手札を比較…`);
+                if (player.hand[0] > targetPlayer.hand[0]) {
+                    targetPlayer.alive = false;
+                    this.log(`${targetPlayer.name}が脱落した。`);
+                    this.handleDiscardEffects(targetPlayer, targetPlayer.hand[0]);
+                } else if (player.hand[0] < targetPlayer.hand[0]) {
+                    player.alive = false;
+                    this.log(`${player.name}が脱落した。`);
+                    this.handleDiscardEffects(player, player.hand[0]);
+                } else {
+                    this.log("引き分け！両者とも生存。");
+                }
+                break;
+
+            case 4: // 魔術師
+                if (!targetPlayer) break;
+                this.log(`${targetPlayer.name}は手札を公開して捨て、引き直す。`);
+                const discarded = targetPlayer.hand.pop();
+                targetPlayer.history.push(discarded);
+
+                // 【姫(8)のルール】魔術師で姫を捨てさせられた場合も即脱落
+                if (discarded === 8) {
+                    targetPlayer.alive = false;
+                    this.log(`【姫】が捨てられたため、${targetPlayer.name}は即座に脱落した！`);
+                } else {
+                    // 山札があれば引き、空なら最初に除外した裏向きのカードを引く（公式ルール準拠）
+                    if (this.deck.length > 0) {
+                        targetPlayer.hand.push(this.deck.pop());
                     } else {
-                        pushLog(`[システム] 山札が空のため、脇に除外されていたカードを引きます。`);
-                        target.hand.push(1); 
+                        targetPlayer.hand.push(this.removedCard);
+                        this.log("山札が空のため、脇に置かれていた裏向きのカードを引き直した。");
                     }
+                    this.checkChancellorBurst(targetPlayer);
                 }
-            } else {
-                pushLog(`[不発] ${target.name} は手札を持っていません。`);
+                break;
+
+            case 5: // 将軍
+                if (!targetPlayer) break;
+                this.log(`${player.name}と${targetPlayer.name}の手札が交換された。`);
+                let temp = player.hand;
+                player.hand = targetPlayer.hand;
+                targetPlayer.hand = temp;
+
+                // 交換によってお互いに大臣バーストが起きるかチェック
+                this.checkChancellorBurst(player);
+                this.checkChancellorBurst(targetPlayer);
+                break;
+
+            case 6: // 大臣
+                this.log("大臣が安全に場に捨てられた。");
+                break;
+
+            case 7: // 公爵
+                this.log("公爵が場に捨てられた。効果はない。");
+                break;
+
+            case 8: // 姫
+                player.alive = false;
+                this.log(`${player.name}は自ら【姫】を捨ててしまったため、脱落した！`);
+                break;
+        }
+
+        this.checkRoundEndConditions();
+    }
+
+    /**
+     * 大臣のバーストチェック (手札2枚の合計値が12以上なら強制脱落)
+     */
+    checkChancellorBurst(player) {
+        if (!player.alive || player.hand.length < 2) return false;
+        const sum = player.hand[0] + player.hand[1];
+        if (sum >= 12) {
+            player.alive = false;
+            // 手札をすべて公開履歴へ落とす
+            while(player.hand.length > 0) {
+                player.history.push(player.hand.pop());
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 脱落したプレイヤーの手札を履歴に安全に送る処理
+     */
+    handleDiscardEffects(player, cardValue) {
+        player.hand = [];
+        player.history.push(cardValue);
+        if (cardValue === 8) {
+            this.log(`${player.name}の元から【姫】が去り、完全に脱落した。`);
+        }
+    }
+
+    /**
+     * 次の生存プレイヤーに手番を回す
+     */
+    nextTurn() {
+        if (this.getAlivePlayers().length <= 1 || this.deck.length === 0) {
+            this.endRound();
+            return;
+        }
+        this.turnIndex = (this.turnIndex + 1) % this.players.length;
+        this.startTurn();
+    }
+
+    /**
+     * ラウンド終了条件の確認
+     */
+    checkRoundEndConditions() {
+        if (this.getAlivePlayers().length <= 1) {
+            this.endRound();
+        } else {
+            this.nextTurn();
+        }
+    }
+
+    /**
+     * ラウンド終了と勝者判定（タイブレーク対応）
+     */
+    endRound() {
+        this.log("--- ラウンド終了。勝敗判定を行います ---");
+        this.isGameStarted = false;
+        let alivePlayers = this.getAlivePlayers();
+
+        if (alivePlayers.length === 1) {
+            // 生き残りが1人の場合
+            alivePlayers[0].score += 1;
+            this.log(`勝者: ${alivePlayers[0].name} (生き残りによる勝利)`);
+            return;
+        } 
+
+        // 山札切れによる手札の強さ（数字）比較
+        this.log("生存者全員の手札を比較します。");
+        alivePlayers.forEach(p => {
+            this.log(`${p.name} の手札: 【${this.cardSettings[p.hand[0]].name}】(強さ:${p.hand[0]})`);
+        });
+
+        let maxValue = Math.max(...alivePlayers.map(p => p.hand[0]));
+        let winners = alivePlayers.filter(p => p.hand[0] === maxValue);
+
+        if (winners.length === 1) {
+            winners[0].score += 1;
+            this.log(`勝者: ${winners[0].name} (カードの強さが最上位)`);
+        } else {
+            // 【公式タイブレーク】数字が同じ場合、これまでに出したカードの「合計値」が大きい方が勝ち
+            this.log("手札の数値が同数のため、これまでの捨て札の合計値でタイブレークを行います。");
+            let maxHistorySum = -1;
+            let finalWinner = null;
+
+            winners.forEach(w => {
+                const sum = w.history.reduce((a, b) => a + b, 0);
+                this.log(`${w.name} の捨て札合計値: ${sum}`);
+                if (sum > maxHistorySum) {
+                    maxHistorySum = sum;
+                    finalWinner = w;
+                }
+            });
+
+            if (finalWinner) {
+                finalWinner.score += 1;
+                this.log(`タイブレーク勝者: ${finalWinner.name}!`);
             }
         }
-        else if (action.card === 5) { 
-            pushLog(`[効果] ${attacker.name} と ${target.name} の手札が交換されました。`);
-            const temp = attacker.hand[0];
-            attacker.hand[0] = target.hand[0];
-            target.hand[0] = temp;
-        }
-    } else {
-        if (action.targetId) pushLog("[不発] 対象が不適切、または守られていたため効果なし。");
     }
 
-    const alivePlayers = gameState.players.filter(p => p.alive);
-    if (alivePlayers.length <= 1 || gameState.deck.length === 0) {
-        endGame();
-    } else {
-        broadcastState();
-        setTimeout(nextTurn, 2000);
+    getAlivePlayers() {
+        return this.players.filter(p => p.alive);
     }
-}
 
-function endGame() {
-    gameState.roundOver = true; 
-    pushLog("--- ラウンド終了 ---");
-    
-    let roundWinner = null;
-    let maxCard = -1;
-
-    gameState.players.forEach(p => {
-        if (p.alive) {
-            const card = p.hand[0] || 0;
-            pushLog(`[公開] ${p.name} の手札は 【${CARD_DATA[card] ? CARD_DATA[card].name : card}】`);
-            if (card > maxCard) {
-                maxCard = card;
-                roundWinner = p;
-            }
+    shuffle(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
         }
-    });
-
-    if (roundWinner) {
-        roundWinner.score += 1; 
-        pushLog(`[目標] ${roundWinner.name} がこのラウンドを獲得！(+1pt)`);
-        
-        if (roundWinner.score >= WINNING_SCORE) {
-            gameState.matchOver = true;
-            pushLog(`🏆🎉【最終勝者】${roundWinner.name} が 3点先取し、ゲームを制しました！！`);
-        }
-    } else {
-        pushLog("[結果] 生存者がおらず、このラウンドは引き分けです。");
     }
-    
-    broadcastState();
+
+    log(message) {
+        console.log(message);
+        // フロントエンドのログUIに反映させる場合はここにDOM操作やコールバックを追加
+        const logBox = document.getElementById("log-box");
+        if (logBox) {
+            logBox.innerHTML += `<div>${message}</div>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+    }
 }
