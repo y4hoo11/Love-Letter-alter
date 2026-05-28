@@ -334,17 +334,18 @@ function executePlayCard(cardValue, target) {
     }
 }
 
-// トラッカーレンダリング
+// トラッカーレンダリング（縦並びから綺麗に折り返す横並び「inline-block型」へ大改修）
 function renderTracker() {
     const listEl = document.getElementById("card-tracker-list");
     if (!listEl) return;
     listEl.innerHTML = "";
 
-    listEl.style.display = "flex";
-    listEl.style.flexWrap = "wrap";
-    listEl.style.gap = "8px";
-    listEl.style.justifyContent = "center";
-    listEl.style.padding = "5px 0";
+    // 親コンテナのスタイルを強力に固定して横並び・中央寄せ・折り返しを強制
+    listEl.style.display = "block";
+    listEl.style.textAlign = "center";
+    listEl.style.width = "100%";
+    listEl.style.padding = "10px 0";
+    listEl.style.boxSizing = "border-box";
 
     const baseCounts = {};
     for (const [val, config] of Object.entries(game.cardSettings)) {
@@ -372,23 +373,34 @@ function renderTracker() {
             const badge = document.createElement("div");
             const isUsed = k >= remain;
 
+            // クラス名を付与
             badge.className = `tracker-item tracker-${i}`;
-            badge.style.display = "inline-flex";
-            badge.style.justifyContent = "center";
-            badge.style.alignItems = "center";
-            badge.style.width = "32px";
-            badge.style.height = "32px";
+            
+            // display: inline-block を使い、Flexboxの不具合を回避して100%横並びを実現
+            badge.style.display = "inline-block";
+            badge.style.width = "34px";
+            badge.style.height = "34px";
+            badge.style.lineHeight = "34px"; // 文字を完全に上下中央に配置
+            badge.style.textAlign = "center";
+            badge.style.margin = "4px";
             badge.style.borderRadius = "50%";
-            badge.style.fontSize = "1.2rem";
+            badge.style.fontSize = "1.3rem";
             badge.style.fontWeight = "bold";
             badge.style.cursor = "help";
+            
+            // ツールチップ用title属性（テキストの混入・破壊を防ぐためHTML構造には埋め込まない）
             badge.title = `【${i}: ${info.name}】\n${info.desc}`;
 
+            // 使用済み（脱落カード）の半透明グレーダウン
             if (isUsed) {
                 badge.style.background = "#2c3e50";
                 badge.style.color = "#7f8c8d";
                 badge.style.opacity = "0.25";
                 badge.style.border = "1px dashed #7f8c8d";
+            } else {
+                // 生きているカードの文字色補正（視認性向上）
+                badge.style.color = "#ffffff";
+                badge.style.textShadow = "1px 1px 2px rgba(0,0,0,0.6)";
             }
 
             badge.innerText = circledNumbers[i];
@@ -432,7 +444,7 @@ export function renderCustomSettingsUI() {
         <h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>
     `;
 
-    // 1番から8番（女王）までの入力欄を先にループ出力
+    // 1番から8番（女王）までの入力欄
     for (let i = 1; i <= 8; i++) {
         html += `
             <div class="setting-item">
@@ -445,7 +457,7 @@ export function renderCustomSettingsUI() {
         `;
     }
 
-    // ご指定の通り、8番 女王の枚数設定のすぐ下（カスタムブロックの最下部）に配布枚数設定を配置
+    // 8番 女王の枚数設定のすぐ下（カスタムブロックの最下部）に配置
     html += `
         <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid #f1c40f;">
             <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>

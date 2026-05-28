@@ -1,8 +1,9 @@
 // script.js
 import { game } from "./game-logic.js";
 import { updateUI, hostStartGame, hostNextRound, injectCustomSettingsUIIntoGame, injectAbortButton } from "./ui-manager.js";
-import { leaveRoom, setRawPlayerList, setConnections, setConnToHost, setIsHost, handleHostReceiveData, handleGuestReceiveData } from "./network-manager.js";
+import { leaveRoom, setRawPlayerList, setConnections, setConnToHost, setIsHost, isHost, handleHostReceiveData, handleGuestReceiveData } from "./network-manager.js";
 
+// 他のファイルからも新ホストへの移行時に呼び出せるようにグローバル(window)に登録
 let peer = null;
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -37,7 +38,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (idDisplay) idDisplay.innerText = `❌ エラーが発生しました: ${err.type}`;
     });
 
-    // 各ボタンへのイベント紐付け（HTMLの変更後も確実に認識されます）
+    // 各ボタンへのイベント紐付け
     document.getElementById("be-host-btn")?.addEventListener("click", beHost);
     document.getElementById("join-room-btn")?.addEventListener("click", joinRoom);
     document.getElementById("leave-room-btn")?.addEventListener("click", leaveRoom);
@@ -45,36 +46,14 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("next-round-btn")?.addEventListener("click", hostNextRound);
 });
 
-// 🏠 部屋を作る (ホスト処理)
-function beHost() {
-    const nameInput = document.getElementById("name-input");
-    window.myPlayerName = nameInput ? nameInput.value.trim() : "ホスト";
-    setIsHost(true);
+// 👑 ホストとしての接続待ち受けを起動する共通関数
+//（最初からホストの時だけでなく、途中で権限譲渡された時にも自動実行されます）
+export function startHostListening() {
+    if (!peer) return;
 
-    // 自分自身（ホスト）をメンバー名簿に初期登録
-    const initialList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0, isHost: true, disconnected: false }];
-    setRawPlayerList(initialList);
-
-    // 画面切り替え
-    document.getElementById("setup-container").style.display = "none";
-    document.getElementById("game-container").style.display = "block";
-
-    // ホスト用のUIパーツ（カスタム設定・中断ボタン）を構築
-    // ui-manager.jsで統合されたカスタムUIが実行されます
-    import("./ui-manager.js").then(mod => {
-        if (typeof mod.renderCustomSettingsUI === "function") {
-            mod.renderCustomSettingsUI();
-        } else {
-            mod.injectCustomSettingsUIIntoGame();
-        }
-    });
-    injectAbortButton();
+    // 既存のリスナーと重複しないよう一度リセットして再登録
+    peer.off('connection');
     
-    // UI反映（ホスト自身が即座にプレイヤーリストに描画される）
-    updateUI();
-    game.log(`🏠 部屋を作成しました。部屋IDを友達に共有してください。`);
-
-    // ゲストからの接続を常時待ち受け
     peer.on('connection', (conn) => {
         setConnections(conn);
         
@@ -89,6 +68,42 @@ function beHost() {
             });
         });
     });
+
+    // ホスト用のUIパーツ（強制中断ボタンなど）を確実に配置
+    injectAbortButton();
+}
+// 外部モジュール（network-managerなど）から権限昇格時に呼べるようにwindowへ紐付け
+window.activateHostMode = startHostListening;
+
+// 🏠 部屋を作る (初期ホスト処理)
+function beHost() {
+    const nameInput = document.getElementById("name-input");
+    window.myPlayerName = nameInput ? nameInput.value.trim() : "ホスト";
+    setIsHost(true);
+
+    // 自分自身（ホスト）をメンバー名簿に初期登録
+    const initialList = [{ id: window.myId, name: window.myPlayerName, spectator: false, score: 0, isHost: true, disconnected: false }];
+    setRawPlayerList(initialList);
+
+    // 画面切り替え
+    document.getElementById("setup-container").style.display = "none";
+    document.getElementById("game-container").style.display = "block";
+
+    // ホスト用のカスタムUIを非同期で構築
+    import("./ui-manager.js").then(mod => {
+        if (typeof mod.renderCustomSettingsUI === "function") {
+            mod.renderCustomSettingsUI();
+        } else {
+            mod.injectCustomSettingsUIIntoGame();
+        }
+    });
+    
+    // 待ち受け開始
+    startHostListening();
+    
+    // UI反映
+    updateUI();
+    game.log(`🏠 部屋を作成しました。部屋IDを友達に共有してください。`);
 }
 
 // 🌐 部屋に入る (ゲスト処理)
@@ -138,7 +153,10 @@ function joinRoom() {
     });
 
     conn.on('close', () => {
-        alert("ホストとの接続が切断されました。");
-        window.location.reload();
+        // 自分が新ホストに昇格して通信が切れたケースを除外してリロード
+        if (!window.isHostMigrated) {
+            alert("ホストとの接続が切断されました。");
+            window.location.reload();
+        }
     });
 }
