@@ -300,12 +300,21 @@ class GameLogic {
         this.isGameStarted = false;
         this.log(`🏁 ラウンドが終了しました！勝敗判定を行います。`);
 
+        // ui-managerなどから生データを参照するためにインポートされていると仮定、
+        // もしグローバルで定義されている場合は window.rawPlayerList など適宜環境に合わせてください
+        const currentRawList = window.rawPlayerList || [];
+
         const alives = this.players.filter(p => p.alive && !p.spectator);
 
         if (alives.length === 1) {
             const winner = alives[0];
             winner.score++;
-            this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利)`);
+            this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利) [現在: ${winner.score}勝]`);
+
+            // 💡【追加】通信同期用の生リスト(rawPlayerList)のスコアも連動して更新
+            const rawWinner = currentRawList.find(p => p.id === winner.id);
+            if (rawWinner) rawWinner.score = winner.score;
+
         } else if (alives.length > 1) {
             this.log(`🎴 山札が尽きたため、残ったプレイヤーの手札の強さ（合計値）で勝負します！`);
             
@@ -327,7 +336,11 @@ class GameLogic {
 
             winners.forEach(w => {
                 w.score++;
-                this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利)`);
+                this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利) [現在: ${w.score}勝]`);
+
+                // 💡【追加】通信同期用の生リスト(rawPlayerList)のスコアも連動して更新（複数勝利対応）
+                const rawWinner = currentRawList.find(p => p.id === w.id);
+                if (rawWinner) rawWinner.score = w.score;
             });
         } else {
             this.log(`🤝 全員が同時に脱落したため、このラウンドは引き分けです。`);
