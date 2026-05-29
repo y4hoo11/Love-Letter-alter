@@ -193,9 +193,17 @@ function handlePlayerDisconnect(peerId) {
     updateUI();
 }
 
-// ホストから全ゲストへ状態をブロードキャスト（課題5, 6, 7対応版）
+// ホストから全ゲストへ状態をブロードキャスト（修正・確定版）
 export function broadcastState() {
     if (!isHost) return;
+
+    // 💡 送信前に、game.players側で増えた最新スコアをホストのrawPlayerList側にも確実に同期しておく防衛策
+    if (game && game.players) {
+        game.players.forEach(gp => {
+            const rp = rawPlayerList.find(p => p.id === gp.id);
+            if (rp) rp.score = gp.score || 0;
+        });
+    }
 
     guestConnections.forEach(conn => {
         if (!conn.open) return;
@@ -208,6 +216,7 @@ export function broadcastState() {
             delete targetPlayerInGame.pendingSecretView; // 送信後に消去
         }
 
+        // 💡 カッコの閉じ順序のエラーをきれいに修正しました
         const payload = JSON.stringify({
             type: "SYNC_STATE",
             rawPlayerList: rawPlayerList, 
@@ -219,20 +228,26 @@ export function broadcastState() {
                 drawSettings: game.drawSettings,
                 logMessages: game.logMessages,
                 // セキュリティ保護：送信先プレイヤー本人以外の他人の手札の中身は「0」にして送る
-                players: game.players.map(p => ({
-                    id: p.id,
-                    name: p.name,
-                    alive: p.alive,
-                    protected: p.protected,
-                    history: p.history,
-                    spectator: p.spectator,
-                    score: p.score,
-                    hand: (p.id === conn.peer) ? p.hand : p.hand.map(() => 0)
-                }))
+                players: game.players.map(p => {
+                    const rawP = rawPlayerList.find(rp => rp.id === p.id);
+                    const accurateScore = rawP ? (rawP.score || 0) : (p.score || 0);
+
+                    return {
+                        id: p.id,
+                        name: p.name,
+                        alive: p.alive,
+                        protected: p.protected,
+                        history: p.history,
+                        spectator: p.spectator,
+                        score: accurateScore, // 💡 最新化されたポイントを格納
+                        hand: (p.id === conn.peer) ? p.hand : p.hand.map(() => 0)
+                    };
+                })
             },
             secretView: secretViewData // のぞき見データ
         });
 
+        // 💡 適切な位置で各ゲストへ送信を実行します
         conn.send(payload);
     });
 }
