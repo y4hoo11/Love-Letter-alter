@@ -3,6 +3,18 @@ import { game } from "./game-logic.js";
 // 💡 不整合解決: connToHost を network-manager から直接インポート
 import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority, hostRemoveDisconnectedPlayer, connToHost } from "./network-manager.js";
 
+// 💡 解決策: IDが消えないよう、updateUIのタイミングで明示的にIDエリアを描画・保護する例外処理
+function renderPeerId() {
+    const container = document.getElementById("peer-id-container");
+    if (container) {
+        container.innerHTML = `
+            <div id="my-peer-id" onclick="copyToClipboard('${window.myId}')" style="cursor: pointer;">
+                🆔 あなたのID: ${window.myId || "接続中..."}
+            </div>
+        `;
+    }
+}
+
 // ホスト用：ゲーム開始
 export function hostStartGame() {
     if (!isHost) return;
@@ -35,6 +47,9 @@ export function hostNextRound() {
 
 // 画面全体の再描画（ゲスト側にもこの更新が走り同期されます）
 export function updateUI() {
+    // 💡 ID要素の消失バグをこのタイミングで強制解決する
+    renderPeerId();
+
     const deckCountEl = document.getElementById("deck-count");
     if (deckCountEl) {
         deckCountEl.innerText = game.isGameStarted ? `山札: ${game.deck.length}枚` : "山札: --枚";
@@ -122,6 +137,8 @@ function renderPlayerList() {
         // これにより、権限譲渡が完了した瞬間に全員のUIからボタンが消えます
         if (amIHost && p.id !== window.myId) {
             const btnGroup = document.createElement("div");
+            btnGroup.style.display = "flex";
+            btnGroup.style.gap = "5px";
             
             if (p.disconnected) {
                 const removeBtn = document.createElement("button");
@@ -507,119 +524,6 @@ function renderTracker() {
     }
 }
 
-// プレイヤーリストのレンダリング（ホスト権限判定の堅牢化版）
-function renderPlayerList() {
-    const listEl = document.getElementById("player-list");
-    if (!listEl) return;
-    listEl.innerHTML = "";
-
-    // 1. 権限判定の強化
-    // 外部の isHost 変数だけでなく、最新の rawPlayerList を見て誰がホストかを特定
-    const currentHost = rawPlayerList.find(p => p.isHost);
-    const amIHost = currentHost && currentHost.id === window.myId;
-
-    rawPlayerList.forEach(p => {
-        const item = document.createElement("div");
-        item.className = "player-item";
-        
-        // 状態に応じたクラス付与
-        if (p.disconnected) item.classList.add("eliminated");
-        if (game.isGameStarted) {
-            const pInGame = game.players.find(gp => gp.id === p.id);
-            if (pInGame && !pInGame.alive) item.classList.add("eliminated");
-            const currentTurnPlayer = game.players[game.turnIndex];
-            if (currentTurnPlayer && currentTurnPlayer.id === p.id && (!pInGame || pInGame.alive)) {
-                item.classList.add("active");
-            }
-        }
-
-        const header = document.createElement("div");
-        header.className = "player-header";
-
-        const nameSpan = document.createElement("span");
-        nameSpan.style.fontWeight = "bold";
-        
-        const statusText = p.disconnected ? " <span style='color:#e74c3c;'>[接続切れ]</span>" : "";
-        const hostCrown = p.isHost ? "👑 " : "";
-        const isProtected = game.isGameStarted && game.players.find(gp => gp.id === p.id)?.protected ? "🛡️" : "";
-
-        nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
-        header.appendChild(nameSpan);
-
-        // 2. 例外処理を含めたボタン表示ロジック
-        // 「自分がホストである」と判定された場合は、対象が自分以外であれば必ずボタンを表示する
-        if (amIHost && p.id !== window.myId) {
-            const btnGroup = document.createElement("div");
-            
-            if (p.disconnected) {
-                const removeBtn = document.createElement("button");
-                removeBtn.className = "btn-danger";
-                removeBtn.innerText = "削除";
-                removeBtn.onclick = () => hostRemoveDisconnectedPlayer(p.id);
-                btnGroup.appendChild(removeBtn);
-            } else {
-                const kickBtn = document.createElement("button");
-                kickBtn.className = "btn-danger";
-                kickBtn.innerText = "キック";
-                kickBtn.onclick = () => hostKickPlayer(p.id);
-                
-                const transBtn = document.createElement("button");
-                transBtn.className = "btn-host-transfer";
-                transBtn.innerText = "譲渡";
-                transBtn.onclick = () => hostTransferAuthority(p.id);
-
-                btnGroup.appendChild(transBtn);
-                btnGroup.appendChild(kickBtn);
-            }
-            header.appendChild(btnGroup);
-        }
-        
-        header.style.display = "flex";
-        header.style.justifyContent = "space-between";
-        header.style.alignItems = "center";
-        item.appendChild(header);
-
-        // 以下、手札描画・捨て札履歴の処理（省略せずに記載）
-        if (game.isGameStarted && !p.spectator && p.id !== window.myId) {
-            const pInGame = game.players.find(gp => gp.id === p.id);
-            if (pInGame && pInGame.alive) {
-                const handContainer = document.createElement("div");
-                handContainer.className = "enemy-hand-container";
-                handContainer.style.marginTop = "5px";
-                handContainer.style.display = "flex";
-                handContainer.style.gap = "5px";
-
-                pInGame.hand.forEach((cardVal, index) => {
-                    const cardBack = document.createElement("div");
-                    cardBack.className = "card-back-red";
-                    cardBack.style.width = "55px";
-                    cardBack.style.height = "40px";
-                    cardBack.style.fontSize = "0.65rem";
-                    cardBack.innerHTML = `<span>[${index + 1}枚]</span>`;
-                    handContainer.appendChild(cardBack);
-                });
-                item.appendChild(handContainer);
-            }
-        }
-
-        const pInGame = game.players.find(gp => gp.id === p.id);
-        if (pInGame && pInGame.history && pInGame.history.length > 0) {
-            const historyEl = document.createElement("div");
-            historyEl.className = "played-history";
-            pInGame.history.forEach(val => {
-                const info = game.cardSettings?.[val] || { name: `カード${val}` };
-                const badge = document.createElement("div");
-                badge.className = `history-card card-${val}`;
-                badge.innerHTML = `<div>${val}</div><div class="h-name">${info.name}</div>`;
-                historyEl.appendChild(badge);
-            });
-            item.appendChild(historyEl);
-        }
-
-        listEl.appendChild(item);
-    });
-}
-
 export function syncGuestSettingsUI(cardSettings, drawSettings) {}
 export function injectCustomSettingsUIIntoGame() {}
 
@@ -646,3 +550,5 @@ export function injectAbortButton() {
     const tracker = document.getElementById("card-tracker-container");
     gameContainer.insertBefore(btn, tracker);
 }
+
+function renderCustomSettingsUI() {}
