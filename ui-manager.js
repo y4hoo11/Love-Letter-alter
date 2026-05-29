@@ -191,7 +191,7 @@ function renderPlayerList() {
         const hostCrown = p.isHost ? "👑 " : "";
         const isProtected = (game && game.isGameStarted && game.players.find(gp => gp.id === p.id)?.protected) ? "🛡️" : "";
 
-        nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
+        nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}P</span> ${isProtected}`;
         header.appendChild(nameSpan);
 
         if (amIHost && p.id !== window.myId) {

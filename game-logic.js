@@ -295,13 +295,12 @@ class GameLogic {
         this.nextTurn();
     }
 
-    // ラウンドの終了・勝者判定
+    // ラウンドの終了・勝者判定（全文）
     endRound() {
         this.isGameStarted = false;
         this.log(`🏁 ラウンドが終了しました！勝敗判定を行います。`);
 
-        // ui-managerなどから生データを参照するためにインポートされていると仮定、
-        // もしグローバルで定義されている場合は window.rawPlayerList など適宜環境に合わせてください
+        // 通信同期用の生リストを参照
         const currentRawList = window.rawPlayerList || [];
 
         const alives = this.players.filter(p => p.alive && !p.spectator);
@@ -309,9 +308,10 @@ class GameLogic {
         if (alives.length === 1) {
             const winner = alives[0];
             winner.score++;
-            this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利) [現在: ${winner.score}勝]`);
+            // 💡 表記を「ポイント」に変更
+            this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利) [現在: ${winner.score}ポイント]`);
 
-            // 💡【追加】通信同期用の生リスト(rawPlayerList)のスコアも連動して更新
+            // 通信同期用の生リスト(rawPlayerList)のスコアも連動して更新
             const rawWinner = currentRawList.find(p => p.id === winner.id);
             if (rawWinner) rawWinner.score = winner.score;
 
@@ -336,9 +336,10 @@ class GameLogic {
 
             winners.forEach(w => {
                 w.score++;
-                this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利) [現在: ${w.score}勝]`);
+                // 💡 表記を「ポイント」に変更
+                this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利) [現在: ${w.score}ポイント]`);
 
-                // 💡【追加】通信同期用の生リスト(rawPlayerList)のスコアも連動して更新（複数勝利対応）
+                // 通信同期用の生リスト(rawPlayerList)のスコアも連動して更新（複数勝利対応）
                 const rawWinner = currentRawList.find(p => p.id === w.id);
                 if (rawWinner) rawWinner.score = w.score;
             });
@@ -350,6 +351,13 @@ class GameLogic {
         const nextBtn = document.getElementById("next-round-btn");
         if (nextBtn && window.isHost) {
             nextBtn.style.display = "block";
+        }
+
+        // 💡 ポイントが入った瞬間に画面のプレイヤーリストをリアルタイムで強制再描画する
+        if (typeof window.updateUI === "function") {
+            window.updateUI();
+        } else if (typeof updateUI === "function") {
+            updateUI();
         }
     }
 }
