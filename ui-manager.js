@@ -263,8 +263,9 @@ export function renderMyHand() {
     });
 }
 
-// ターゲット選択モーダル
+// ターゲット選択モーダル（守護ルール完全対応版）
 function selectPlayTarget(cardValue) {
+    // 4(守護), 7(対象なし), 8(対象なし) のカードは自分自身にのみ影響するか対象不要なため即発動
     if ([4, 7, 8].includes(cardValue)) {
         executePlayCard(cardValue, {});
         return;
@@ -276,20 +277,31 @@ function selectPlayTarget(cardValue) {
 
     const currentInfo = game.cardSettings?.[cardValue] || { name: "カード" };
     container.innerHTML = `<h4>「${currentInfo.name}」の対象プレイヤーを選択</h4>`;
-    const targets = game.players.filter(p => p.alive && !p.spectator && p.id !== window.myId);
 
-    if (targets.length === 0) {
+    // 💡 修正ポイント①: 生存していて、観戦者ではなく、自分以外、かつ「🛡️守護(protected)ではない」プレイヤーのみを抽出
+    const validTargets = game.players.filter(p => 
+        p.alive && 
+        !p.spectator && 
+        p.id !== window.myId && 
+        !p.protected
+    );
+
+    // 💡 修正ポイント②: もし守護などで「選べる対象が1人もいない」場合の処理
+    if (validTargets.length === 0) {
         const btn = document.createElement("button");
-        btn.innerText = "対象なし（不発プレイ）";
+        btn.innerText = "対象なし（守護のため不発プレイ）";
+        btn.style.background = "#e67e22"; // 不発と分かりやすい色に
         btn.onclick = () => {
             modal.style.display = "none";
+            // 対象なし（空オブジェクト）でカードを場に出す
             executePlayCard(cardValue, {});
         };
         container.appendChild(btn);
     } else {
-        targets.forEach(t => {
+        // 💡 修正ポイント③: 有効な（守護で守られていない）プレイヤーのみを選択肢として生成
+        validTargets.forEach(t => {
             const btn = document.createElement("button");
-            btn.innerText = `${t.name} ${t.protected ? "(🛡️保護中)" : ""}`;
+            btn.innerText = t.name; // 守護プレイヤーはvalidTargetsから除外されているため、ここには出現しません
             btn.onclick = () => {
                 // 複数枚所持ルールに対応。相手の手札が2枚以上あれば、どの位置のカードを狙うか選択させる
                 if (t.hand && t.hand.length > 1) {
@@ -485,7 +497,7 @@ function renderTracker() {
     }
 }
 
-// ⚙️ 統合されたルール・枚数カスタム設定UI
+// ⚙️ 統合されたルール・枚数カスタム設定UI（ゲーム中隠蔽＆ホバー表示版）
 export function renderCustomSettingsUI() {
     const gameContainer = document.getElementById("game-container");
     if (!gameContainer) return;
@@ -504,6 +516,13 @@ export function renderCustomSettingsUI() {
         gameContainer.insertBefore(div, logBox);
     }
 
+    // 💡 修正ポイント①: ゲーム開始状態に応じてクラスを付与し、CSSと連動させる
+    if (game.isGameStarted) {
+        div.classList.add("game-started");
+    } else {
+        div.classList.remove("game-started");
+    }
+
     if (!isHost) {
         div.style.opacity = "0.5";
         div.style.pointerEvents = "none";
@@ -512,11 +531,14 @@ export function renderCustomSettingsUI() {
         div.style.pointerEvents = "auto";
     }
 
-    const titleText = isHost ? "⚙️ ルームカスタム設定 (ホスト権限)" : "📋 現在のルームカスタム設定 (閲覧のみ)";
-    const disabledAttr = isHost ? "" : "disabled";
+    // 💡 修正ポイント②: ゲーム中と待機中でタイトルテキストを「現在のルール」に切り替える
+    let titleText = isHost ? "⚙️ ルームカスタム設定 (ホスト権限)" : "📋 現在のルームカスタム設定 (閲覧のみ)";
+    if (game.isGameStarted) {
+        titleText = "ℹ️ 現在のルール (カーソルを合わせて表示)";
+    }
 
-    let html = `<h3>${titleText}</h3>`;
-    html += `<h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
+    let html = `<h3 style="margin:0; font-size:0.95rem; font-weight:bold; color:#f1c40f;">${titleText}</h3>`;
+    html += `<h4 style="margin: 12px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
 
     for (let i = 1; i <= 8; i++) {
         const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: `カード${i}` };
@@ -526,7 +548,7 @@ export function renderCustomSettingsUI() {
                 <span class="setting-card-info">${i}番 ${info.name}</span>
                 <div class="setting-input-wrapper">
                     <label>枚数:</label>
-                    <input type="number" id="cfg-count-${i}" value="${countVal}" min="0" max="10" ${disabledAttr}>
+                    <input type="number" id="cfg-count-${i}" value="${countVal}" min="0" max="10" ${isHost ? "" : "disabled"}>
                 </div>
             </div>
         `;
@@ -541,13 +563,13 @@ export function renderCustomSettingsUI() {
             <div class="setting-item">
                 <span>最初の手札枚数:</span>
                 <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-first-draw" value="${firstDrawVal}" min="1" max="5" ${disabledAttr}>
+                    <input type="number" id="cfg-first-draw" value="${firstDrawVal}" min="1" max="5" ${isHost ? "" : "disabled"}>
                 </div>
             </div>
             <div class="setting-item">
                 <span>毎ターンのドロー枚数:</span>
                 <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-every-draw" value="${everyDrawVal}" min="1" max="3" ${disabledAttr}>
+                    <input type="number" id="cfg-every-draw" value="${everyDrawVal}" min="1" max="3" ${isHost ? "" : "disabled"}>
                 </div>
             </div>
         </div>
@@ -555,7 +577,8 @@ export function renderCustomSettingsUI() {
     
     div.innerHTML = html;
 
-    if (isHost) {
+    // イベントリスナーの登録（待機室でのみ動作、ゲーム中はホバー限定にするためガード）
+    if (isHost && !game.isGameStarted) {
         document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
             if(!game.drawSettings) game.drawSettings = {};
             game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);

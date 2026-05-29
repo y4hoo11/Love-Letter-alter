@@ -248,7 +248,7 @@ export function hostRemoveDisconnectedPlayer(peerId) {
     updateUI();
 }
 
-// ホスト用：ホスト権限の譲渡
+// ホスト用：ホスト権限の譲渡（同期漏れバグ修正版）
 export function hostTransferAuthority(peerId) {
     if (!isHost) return;
     const target = rawPlayerList.find(p => p.id === peerId);
@@ -258,11 +258,16 @@ export function hostTransferAuthority(peerId) {
     if (currentHost) currentHost.isHost = false;
     
     target.isHost = true;
+    
+    game.log(`👑 ホスト権限が ${target.name} に譲渡されました。`);
+    
+    // 【重要】自分がゲストになる前に、新ホスト情報を全員（次のホスト含む）にブロードキャストする
+    broadcastState();
+    
+    // 送信が完了した後に、自分自身のホスト状態を解除してゲストに移行する
     isHost = false; 
     window.isHost = false;
     
-    game.log(`👑 ホスト権限が ${target.name} に譲渡されました。`);
-    broadcastState();
     updateUI();
 }
 
