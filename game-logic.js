@@ -51,17 +51,29 @@ class GameLogic {
         const logBox = document.getElementById("log-box");
         if (logBox) logBox.innerHTML = "";
 
-        // 参加プレイヤーの構築
-        this.players = rawList.map(p => ({
-            id: p.id,
-            name: p.name,
-            hand: [],
-            alive: true,
-            protected: false,
-            history: [],
-            spectator: p.spectator || false,
-            score: p.score || 0
-        }));
+        this.players = rawList.map(p => {
+            // 💡 前回のラウンド（this.players）に同じプレイヤーがいたら、その最新スコアを優先して引き継ぐ
+            const prevPlayer = this.players.find(old => old.id === p.id);
+            const currentScore = prevPlayer ? (prevPlayer.score || 0) : (p.score || 0);
+
+            return {
+                id: p.id,
+                name: p.name,
+                hand: [],
+                alive: true,
+                protected: false,
+                history: [],
+                spectator: p.spectator || false,
+                score: currentScore // 💡 蓄積されたスコアを代入
+            };
+        });
+
+        // 💡 同時に、通信名簿側（rawPlayerList）のスコアも最新状態に同期をかける
+        const currentRawList = window.rawPlayerList || rawList;
+        this.players.forEach(p => {
+            const rawP = currentRawList.find(rp => rp.id === p.id);
+            if (rawP) rawP.score = p.score;
+        });
 
         const activePlayers = this.players.filter(p => !p.spectator);
         if (activePlayers.length < 2) {
