@@ -74,23 +74,31 @@ export function updateUI() {
     renderCustomSettingsUI();
 }
 
-// プレイヤーリストのレンダリング
+// プレイヤーリストのレンダリング（権限譲渡・表示制御の最適化版）
 function renderPlayerList() {
     const listEl = document.getElementById("player-list");
     if (!listEl) return;
     listEl.innerHTML = "";
 
+    // 💡 不整合解決: 現在のホストをリスト全体から正確に特定する
+    const currentHost = rawPlayerList.find(p => p.isHost);
+    // 自分がホストかどうかを「権限者フラグ」から判定
+    const amIHost = currentHost && currentHost.id === window.myId;
+
     rawPlayerList.forEach(p => {
         const item = document.createElement("div");
         item.className = "player-item";
         
+        // 接続切れの状態表示
         if (p.disconnected) {
             item.classList.add("eliminated");
         }
 
+        // ゲーム中の状態（生存・脱落・ターンプレイヤー）のクラス付与
         if (game.isGameStarted) {
             const pInGame = game.players.find(gp => gp.id === p.id);
             if (pInGame && !pInGame.alive) item.classList.add("eliminated");
+            
             const currentTurnPlayer = game.players[game.turnIndex];
             if (currentTurnPlayer && currentTurnPlayer.id === p.id && (!pInGame || pInGame.alive)) {
                 item.classList.add("active");
@@ -110,8 +118,9 @@ function renderPlayerList() {
         nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
         header.appendChild(nameSpan);
 
-        // 操作対象が「自分自身以外」の時だけキック・譲渡ボタンを表示するガード
-        if (isHost && p.id !== window.myId) {
+        // 💡 修正ポイント: 「自分自身が現在ホストである場合のみ」ボタンを表示
+        // これにより、権限譲渡が完了した瞬間に全員のUIからボタンが消えます
+        if (amIHost && p.id !== window.myId) {
             const btnGroup = document.createElement("div");
             
             if (p.disconnected) {
@@ -137,12 +146,13 @@ function renderPlayerList() {
             }
             header.appendChild(btnGroup);
         }
+        
         header.style.display = "flex";
         header.style.justifyContent = "space-between";
         header.style.alignItems = "center";
         item.appendChild(header);
 
-        // 相手の手札描画
+        // 相手の手札描画（観戦者以外）
         if (game.isGameStarted && !p.spectator && p.id !== window.myId) {
             const pInGame = game.players.find(gp => gp.id === p.id);
             if (pInGame && pInGame.alive) {
@@ -497,32 +507,36 @@ function renderTracker() {
     }
 }
 
-// ⚙️ 統合されたルール・枚数カスタム設定UI（ゲーム中隠蔽＆ホバー表示版）
+// ⚙️ 統合されたルール・枚数カスタム設定UI（ゲーム中隠蔽＆ホバー表示対応版）
 export function renderCustomSettingsUI() {
     const gameContainer = document.getElementById("game-container");
     if (!gameContainer) return;
 
+    // 古いUIがあれば削除
     const oldHostUI = document.getElementById("host-custom-settings");
     const oldGuestUI = document.getElementById("guest-custom-settings");
     if (oldHostUI) oldHostUI.remove();
     if (oldGuestUI) oldGuestUI.remove();
 
+    // UIコンテナの生成・取得
     let div = document.getElementById("integrated-custom-settings");
     if (!div) {
         div = document.createElement("div");
         div.id = "integrated-custom-settings";
         div.className = "custom-card-settings";
+        // ログボックスの上に配置
         const logBox = document.getElementById("log-box");
         gameContainer.insertBefore(div, logBox);
     }
 
-    // 💡 修正ポイント①: ゲーム開始状態に応じてクラスを付与し、CSSと連動させる
+    // 💡 ゲーム状態によってCSSクラスを切り替え
     if (game.isGameStarted) {
         div.classList.add("game-started");
     } else {
         div.classList.remove("game-started");
     }
 
+    // 権限による操作可否
     if (!isHost) {
         div.style.opacity = "0.5";
         div.style.pointerEvents = "none";
@@ -531,15 +545,17 @@ export function renderCustomSettingsUI() {
         div.style.pointerEvents = "auto";
     }
 
-    // 💡 修正ポイント②: ゲーム中と待機中でタイトルテキストを「現在のルール」に切り替える
+    // ゲーム開始時と待機中でタイトルを切り替え
     let titleText = isHost ? "⚙️ ルームカスタム設定 (ホスト権限)" : "📋 現在のルームカスタム設定 (閲覧のみ)";
     if (game.isGameStarted) {
         titleText = "ℹ️ 現在のルール (カーソルを合わせて表示)";
     }
 
-    let html = `<h3 style="margin:0; font-size:0.95rem; font-weight:bold; color:#f1c40f;">${titleText}</h3>`;
+    let html = `<div class="rule-title-wrapper"><h3 style="margin:0; font-size:0.95rem; font-weight:bold; color:#f1c40f;">${titleText}</h3></div>`;
+    
     html += `<h4 style="margin: 12px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
 
+    // カード枚数設定の描画
     for (let i = 1; i <= 8; i++) {
         const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: `カード${i}` };
         const countVal = game.cardSettings?.[i]?.count !== undefined ? game.cardSettings[i].count : 1;
@@ -554,6 +570,7 @@ export function renderCustomSettingsUI() {
         `;
     }
 
+    // 配布枚数設定の描画
     const firstDrawVal = game.drawSettings?.firstTurnCount !== undefined ? game.drawSettings.firstTurnCount : 1;
     const everyDrawVal = game.drawSettings?.everyTurnCount !== undefined ? game.drawSettings.everyTurnCount : 1;
 
@@ -577,7 +594,7 @@ export function renderCustomSettingsUI() {
     
     div.innerHTML = html;
 
-    // イベントリスナーの登録（待機室でのみ動作、ゲーム中はホバー限定にするためガード）
+    // イベントリスナーの登録（ゲーム開始前かつホストのみ）
     if (isHost && !game.isGameStarted) {
         document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
             if(!game.drawSettings) game.drawSettings = {};

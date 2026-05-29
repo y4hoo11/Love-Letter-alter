@@ -248,25 +248,26 @@ export function hostRemoveDisconnectedPlayer(peerId) {
     updateUI();
 }
 
-// ホスト用：ホスト権限の譲渡（同期漏れバグ修正版）
 export function hostTransferAuthority(peerId) {
     if (!isHost) return;
     const target = rawPlayerList.find(p => p.id === peerId);
     if (!target || target.disconnected) return;
 
-    const currentHost = rawPlayerList.find(p => p.id === window.myId);
-    if (currentHost) currentHost.isHost = false;
-    
-    target.isHost = true;
+    // 1. 状態の更新
+    rawPlayerList.forEach(p => p.isHost = (p.id === peerId));
     
     game.log(`👑 ホスト権限が ${target.name} に譲渡されました。`);
     
-    // 【重要】自分がゲストになる前に、新ホスト情報を全員（次のホスト含む）にブロードキャストする
+    // 2. 【重要】全員に対して「誰が新ホストか」を明示的に通知する
+    // broadcastState()だけでなく、明確な権限変更イベントを送るのが安全です
     broadcastState();
     
-    // 送信が完了した後に、自分自身のホスト状態を解除してゲストに移行する
+    // 3. 自分自身のホスト状態を解除
     isHost = false; 
     window.isHost = false;
+    
+    // 4. 新しいホスト側での初期化を促す（もし新ホストがまだ接続待ちを開始していない場合）
+    // 必要であれば、ここで target.id に対して「ホストとして振る舞え」という命令を送る
     
     updateUI();
 }
