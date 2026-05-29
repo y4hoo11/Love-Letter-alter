@@ -103,9 +103,24 @@ export function updateUI() {
         lastHostId = currentHost.id;
     }
 
+    // --- 【変更箇所】山札枚数とドロー設定枚数の表示制御 ---
     const deckCountEl = document.getElementById("deck-count");
     if (deckCountEl) {
-        deckCountEl.innerText = (game && game.isGameStarted) ? `山札: ${game.deck.length}枚` : "山札: --枚";
+        if (game && game.isGameStarted) {
+            // 初期設定の数値を取得（未定義なら1）
+            const firstCount = game.drawSettings?.firstTurnCount ?? 1;
+            const everyCount = game.drawSettings?.everyTurnCount ?? 1;
+            
+            // 山札の横に並ぶよう、インライン要素としてドロー情報を追加
+            deckCountEl.innerHTML = `
+                山札: ${game.deck.length}枚 
+                <span style="margin-left: 10px; font-size: 0.85rem; opacity: 0.8; background: rgba(255,255,255,0.15); padding: 2px 6px; border-radius: 4px;">
+                    📐 初手: ${firstCount}枚 / 毎ターン: ${everyCount}枚ドロー
+                </span>
+            `;
+        } else {
+            deckCountEl.innerText = "山札: --枚";
+        }
     }
 
     const roleDisplayEl = document.getElementById("role-display");
