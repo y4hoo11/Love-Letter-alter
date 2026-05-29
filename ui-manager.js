@@ -3,6 +3,8 @@ import { game } from "./game-logic.js";
 // 💡 不整合解決: connToHost を network-manager から直接インポート
 import { isHost, rawPlayerList, broadcastState, hostKickPlayer, hostTransferAuthority, hostRemoveDisconnectedPlayer, connToHost } from "./network-manager.js";
 
+let lastHostId = null;
+
 // 💡 解決策: IDが消えないよう、updateUIのタイミングで明示的にIDエリアを描画・保護する例外処理
 function renderPeerId() {
     const container = document.getElementById("peer-id-container");
@@ -49,6 +51,20 @@ export function hostNextRound() {
 export function updateUI() {
     // 💡 ID要素の消失バグをこのタイミングで強制解決する
     renderPeerId();
+
+    // --- 【不整合解決: ホスト交代ログの全員同期】 ---
+    const currentHost = rawPlayerList.find(p => p.isHost);
+    if (currentHost) {
+        // 初回読み込み時(lastHostIdがnullのとき)を除き、ホストIDが変わった瞬間を全員の画面で検知
+        if (lastHostId && lastHostId !== currentHost.id) {
+            // 自分が新ホストになった時のログ（「あなたが新しいホストになりました！」など）は
+            // network-manager側の受信イベント等で処理されるため、ここではそれ以外の第三者視点のログを補完します
+            if (currentHost.id !== window.myId) {
+                game.log(`👑 ホスト権限が ${currentHost.name} に譲渡されました。`);
+            }
+        }
+        lastHostId = currentHost.id; // 現在のホストIDを記憶して次回更新時と比較
+    }
 
     const deckCountEl = document.getElementById("deck-count");
     if (deckCountEl) {
@@ -551,4 +567,125 @@ export function injectAbortButton() {
     gameContainer.insertBefore(btn, tracker);
 }
 
-function renderCustomSettingsUI() {}
+// ⚙️ 統合されたルール・枚数カスタム設定UI
+export function renderCustomSettingsUI() {
+    const gameContainer = document.getElementById("game-container");
+    if (!gameContainer) return;
+
+    const oldHostUI = document.getElementById("host-custom-settings");
+    const oldGuestUI = document.getElementById("guest-custom-settings");
+    if (oldHostUI) oldHostUI.remove();
+    if (oldGuestUI) oldGuestUI.remove();
+
+    let div = document.getElementById("integrated-custom-settings");
+    if (!div) {
+        div = document.createElement("div");
+        div.id = "integrated-custom-settings";
+        div.className = "custom-card-settings";
+        const logBox = document.getElementById("log-box");
+        gameContainer.insertBefore(div, logBox);
+    }
+
+    if (!isHost) {
+        div.style.opacity = "0.5";
+        div.style.pointerEvents = "none";
+    } else {
+        div.style.opacity = "1.0";
+        div.style.pointerEvents = "auto";
+    }
+
+    const titleText = isHost ? "⚙️ ルームカスタム設定 (ホスト権限)" : "📋 現在のルームカスタム設定 (閲覧のみ)";
+    const disabledAttr = isHost ? "" : "disabled";
+
+    let html = `<h3>${titleText}</h3>`;
+    html += `<h4 style="margin: 5px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
+
+    for (let i = 1; i <= 8; i++) {
+        const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: `カード${i}` };
+        const countVal = game.cardSettings?.[i]?.count !== undefined ? game.cardSettings[i].count : 1;
+        html += `
+            <div class="setting-item">
+                <span class="setting-card-info">${i}番 ${info.name}</span>
+                <div class="setting-input-wrapper">
+                    <label>枚数:</label>
+                    <input type="number" id="cfg-count-${i}" value="${countVal}" min="0" max="10" ${disabledAttr}>
+                </div>
+            </div>
+        `;
+    }
+
+    const firstDrawVal = game.drawSettings?.firstTurnCount !== undefined ? game.drawSettings.firstTurnCount : 1;
+    const everyDrawVal = game.drawSettings?.everyTurnCount !== undefined ? game.drawSettings.everyTurnCount : 1;
+
+    html += `
+        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid #f1c40f;">
+            <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>
+            <div class="setting-item">
+                <span>最初の手札枚数:</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="cfg-first-draw" value="${firstDrawVal}" min="1" max="5" ${disabledAttr}>
+                </div>
+            </div>
+            <div class="setting-item">
+                <span>毎ターンのドロー枚数:</span>
+                <div class="setting-input-wrapper">
+                    <input type="number" id="cfg-every-draw" value="${everyDrawVal}" min="1" max="3" ${disabledAttr}>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    div.innerHTML = html;
+
+    if (isHost) {
+        document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
+            if(!game.drawSettings) game.drawSettings = {};
+            game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);
+            broadcastState();
+            updateUI();
+        });
+
+        document.getElementById("cfg-every-draw")?.addEventListener("change", (e) => {
+            if(!game.drawSettings) game.drawSettings = {};
+            game.drawSettings.everyTurnCount = Math.max(1, parseInt(e.target.value) || 1);
+            broadcastState();
+            updateUI();
+        });
+
+        for (let i = 1; i <= 8; i++) {
+            document.getElementById(`cfg-count-${i}`)?.addEventListener("change", (e) => {
+                if(!game.cardSettings[i]) game.cardSettings[i] = {};
+                game.cardSettings[i].count = Math.max(0, parseInt(e.target.value) || 0);
+                broadcastState();
+                updateUI();
+            });
+        }
+    }
+}
+
+export function syncGuestSettingsUI(cardSettings, drawSettings) {}
+export function injectCustomSettingsUIIntoGame() {}
+
+// ホスト用：ゲーム強制中断ボタン
+export function injectAbortButton() {
+    const gameContainer = document.getElementById("game-container");
+    if (!gameContainer || document.getElementById("abort-game-btn")) return;
+
+    const btn = document.createElement("button");
+    btn.id = "abort-game-btn";
+    btn.innerText = "🛑 ゲームを強制中断して待機室に戻る";
+    btn.style.background = "#e74c3c";
+    btn.style.marginTop = "10px";
+    btn.style.display = isHost ? "block" : "none";
+    
+    btn.onclick = () => {
+        if (!isHost) return;
+        game.isGameStarted = false;
+        game.log("🛑 ホストによってゲームが強制中断されました。");
+        broadcastState();
+        updateUI();
+    };
+
+    const tracker = document.getElementById("card-tracker-container");
+    gameContainer.insertBefore(btn, tracker);
+}
