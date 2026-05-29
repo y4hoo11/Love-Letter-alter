@@ -52,7 +52,7 @@ class GameLogic {
         if (logBox) logBox.innerHTML = "";
 
         // 参加プレイヤーの構築
-        // 💡 スコアは通信名簿（rawList）に完全に蓄積されているため、そのまま初期値として受け取るだけにします。
+        // 💡 シンプルに引数の名簿（rawList）のスコアをそのまま正義として受け取る
         this.players = rawList.map(p => ({
             id: p.id,
             name: p.name,
@@ -61,7 +61,7 @@ class GameLogic {
             protected: false,
             history: [],
             spectator: p.spectator || false,
-            score: p.score || 0 // 名簿にある現在のポイントをそのまま維持
+            score: p.score || 0
         }));
 
         // 💡 同時に、通信名簿側（rawPlayerList）のスコアも最新状態に同期をかける

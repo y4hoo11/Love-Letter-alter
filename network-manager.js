@@ -67,7 +67,19 @@ export function handleHostReceiveData(conn, data) {
             if (!game.isGameStarted) return;
             const currentPlayer = game.players[game.turnIndex];
             if (currentPlayer && currentPlayer.id === data.playerId) {
+                // 1. カードを実行
                 game.playCard(data.playerId, data.cardValue, data.target);
+                
+                // 💡【重要追加】もしこのカードプレイでゲームが終了（リザルト状態）になった場合
+                if (!game.isGameStarted) {
+                    // game.players で増えた最新のスコアを、本元の rawPlayerList に確実にコピーする
+                    game.players.forEach(gp => {
+                        const rp = rawPlayerList.find(p => p.id === gp.id);
+                        if (rp) rp.score = gp.score || 0;
+                    });
+                }
+
+                // 2. 全員に最新のスコアが入った状態を送信して、画面を更新
                 broadcastState();
                 updateUI();
             }
