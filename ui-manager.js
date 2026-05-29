@@ -507,118 +507,117 @@ function renderTracker() {
     }
 }
 
-// ⚙️ 統合されたルール・枚数カスタム設定UI（ゲーム中隠蔽＆ホバー表示対応版）
-export function renderCustomSettingsUI() {
-    const gameContainer = document.getElementById("game-container");
-    if (!gameContainer) return;
+// プレイヤーリストのレンダリング（ホスト権限判定の堅牢化版）
+function renderPlayerList() {
+    const listEl = document.getElementById("player-list");
+    if (!listEl) return;
+    listEl.innerHTML = "";
 
-    // 古いUIがあれば削除
-    const oldHostUI = document.getElementById("host-custom-settings");
-    const oldGuestUI = document.getElementById("guest-custom-settings");
-    if (oldHostUI) oldHostUI.remove();
-    if (oldGuestUI) oldGuestUI.remove();
+    // 1. 権限判定の強化
+    // 外部の isHost 変数だけでなく、最新の rawPlayerList を見て誰がホストかを特定
+    const currentHost = rawPlayerList.find(p => p.isHost);
+    const amIHost = currentHost && currentHost.id === window.myId;
 
-    // UIコンテナの生成・取得
-    let div = document.getElementById("integrated-custom-settings");
-    if (!div) {
-        div = document.createElement("div");
-        div.id = "integrated-custom-settings";
-        div.className = "custom-card-settings";
-        // ログボックスの上に配置
-        const logBox = document.getElementById("log-box");
-        gameContainer.insertBefore(div, logBox);
-    }
-
-    // 💡 ゲーム状態によってCSSクラスを切り替え
-    if (game.isGameStarted) {
-        div.classList.add("game-started");
-    } else {
-        div.classList.remove("game-started");
-    }
-
-    // 権限による操作可否
-    if (!isHost) {
-        div.style.opacity = "0.5";
-        div.style.pointerEvents = "none";
-    } else {
-        div.style.opacity = "1.0";
-        div.style.pointerEvents = "auto";
-    }
-
-    // ゲーム開始時と待機中でタイトルを切り替え
-    let titleText = isHost ? "⚙️ ルームカスタム設定 (ホスト権限)" : "📋 現在のルームカスタム設定 (閲覧のみ)";
-    if (game.isGameStarted) {
-        titleText = "ℹ️ 現在のルール (カーソルを合わせて表示)";
-    }
-
-    let html = `<div class="rule-title-wrapper"><h3 style="margin:0; font-size:0.95rem; font-weight:bold; color:#f1c40f;">${titleText}</h3></div>`;
-    
-    html += `<h4 style="margin: 12px 0 12px 0; font-size:0.9rem;">🃏 カードデッキ構成枚数</h4>`;
-
-    // カード枚数設定の描画
-    for (let i = 1; i <= 8; i++) {
-        const info = game.cardSettings?.[i] || game.defaultCardSettings?.[i] || { name: `カード${i}` };
-        const countVal = game.cardSettings?.[i]?.count !== undefined ? game.cardSettings[i].count : 1;
-        html += `
-            <div class="setting-item">
-                <span class="setting-card-info">${i}番 ${info.name}</span>
-                <div class="setting-input-wrapper">
-                    <label>枚数:</label>
-                    <input type="number" id="cfg-count-${i}" value="${countVal}" min="0" max="10" ${isHost ? "" : "disabled"}>
-                </div>
-            </div>
-        `;
-    }
-
-    // 配布枚数設定の描画
-    const firstDrawVal = game.drawSettings?.firstTurnCount !== undefined ? game.drawSettings.firstTurnCount : 1;
-    const everyDrawVal = game.drawSettings?.everyTurnCount !== undefined ? game.drawSettings.everyTurnCount : 1;
-
-    html += `
-        <div style="background: rgba(0,0,0,0.2); padding: 10px; border-radius: 6px; margin-top: 15px; border: 1px solid #f1c40f;">
-            <h4 style="margin: 0 0 8px 0; color: #f1c40f; font-size:0.9rem;">📐 配布枚数設定</h4>
-            <div class="setting-item">
-                <span>最初の手札枚数:</span>
-                <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-first-draw" value="${firstDrawVal}" min="1" max="5" ${isHost ? "" : "disabled"}>
-                </div>
-            </div>
-            <div class="setting-item">
-                <span>毎ターンのドロー枚数:</span>
-                <div class="setting-input-wrapper">
-                    <input type="number" id="cfg-every-draw" value="${everyDrawVal}" min="1" max="3" ${isHost ? "" : "disabled"}>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    div.innerHTML = html;
-
-    // イベントリスナーの登録（ゲーム開始前かつホストのみ）
-    if (isHost && !game.isGameStarted) {
-        document.getElementById("cfg-first-draw")?.addEventListener("change", (e) => {
-            if(!game.drawSettings) game.drawSettings = {};
-            game.drawSettings.firstTurnCount = Math.max(1, parseInt(e.target.value) || 1);
-            broadcastState();
-            updateUI();
-        });
-
-        document.getElementById("cfg-every-draw")?.addEventListener("change", (e) => {
-            if(!game.drawSettings) game.drawSettings = {};
-            game.drawSettings.everyTurnCount = Math.max(1, parseInt(e.target.value) || 1);
-            broadcastState();
-            updateUI();
-        });
-
-        for (let i = 1; i <= 8; i++) {
-            document.getElementById(`cfg-count-${i}`)?.addEventListener("change", (e) => {
-                if(!game.cardSettings[i]) game.cardSettings[i] = {};
-                game.cardSettings[i].count = Math.max(0, parseInt(e.target.value) || 0);
-                broadcastState();
-                updateUI();
-            });
+    rawPlayerList.forEach(p => {
+        const item = document.createElement("div");
+        item.className = "player-item";
+        
+        // 状態に応じたクラス付与
+        if (p.disconnected) item.classList.add("eliminated");
+        if (game.isGameStarted) {
+            const pInGame = game.players.find(gp => gp.id === p.id);
+            if (pInGame && !pInGame.alive) item.classList.add("eliminated");
+            const currentTurnPlayer = game.players[game.turnIndex];
+            if (currentTurnPlayer && currentTurnPlayer.id === p.id && (!pInGame || pInGame.alive)) {
+                item.classList.add("active");
+            }
         }
-    }
+
+        const header = document.createElement("div");
+        header.className = "player-header";
+
+        const nameSpan = document.createElement("span");
+        nameSpan.style.fontWeight = "bold";
+        
+        const statusText = p.disconnected ? " <span style='color:#e74c3c;'>[接続切れ]</span>" : "";
+        const hostCrown = p.isHost ? "👑 " : "";
+        const isProtected = game.isGameStarted && game.players.find(gp => gp.id === p.id)?.protected ? "🛡️" : "";
+
+        nameSpan.innerHTML = `${hostCrown}${p.name}${statusText} <span class="score-badge">${p.score || 0}勝</span> ${isProtected}`;
+        header.appendChild(nameSpan);
+
+        // 2. 例外処理を含めたボタン表示ロジック
+        // 「自分がホストである」と判定された場合は、対象が自分以外であれば必ずボタンを表示する
+        if (amIHost && p.id !== window.myId) {
+            const btnGroup = document.createElement("div");
+            
+            if (p.disconnected) {
+                const removeBtn = document.createElement("button");
+                removeBtn.className = "btn-danger";
+                removeBtn.innerText = "削除";
+                removeBtn.onclick = () => hostRemoveDisconnectedPlayer(p.id);
+                btnGroup.appendChild(removeBtn);
+            } else {
+                const kickBtn = document.createElement("button");
+                kickBtn.className = "btn-danger";
+                kickBtn.innerText = "キック";
+                kickBtn.onclick = () => hostKickPlayer(p.id);
+                
+                const transBtn = document.createElement("button");
+                transBtn.className = "btn-host-transfer";
+                transBtn.innerText = "譲渡";
+                transBtn.onclick = () => hostTransferAuthority(p.id);
+
+                btnGroup.appendChild(transBtn);
+                btnGroup.appendChild(kickBtn);
+            }
+            header.appendChild(btnGroup);
+        }
+        
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "center";
+        item.appendChild(header);
+
+        // 以下、手札描画・捨て札履歴の処理（省略せずに記載）
+        if (game.isGameStarted && !p.spectator && p.id !== window.myId) {
+            const pInGame = game.players.find(gp => gp.id === p.id);
+            if (pInGame && pInGame.alive) {
+                const handContainer = document.createElement("div");
+                handContainer.className = "enemy-hand-container";
+                handContainer.style.marginTop = "5px";
+                handContainer.style.display = "flex";
+                handContainer.style.gap = "5px";
+
+                pInGame.hand.forEach((cardVal, index) => {
+                    const cardBack = document.createElement("div");
+                    cardBack.className = "card-back-red";
+                    cardBack.style.width = "55px";
+                    cardBack.style.height = "40px";
+                    cardBack.style.fontSize = "0.65rem";
+                    cardBack.innerHTML = `<span>[${index + 1}枚]</span>`;
+                    handContainer.appendChild(cardBack);
+                });
+                item.appendChild(handContainer);
+            }
+        }
+
+        const pInGame = game.players.find(gp => gp.id === p.id);
+        if (pInGame && pInGame.history && pInGame.history.length > 0) {
+            const historyEl = document.createElement("div");
+            historyEl.className = "played-history";
+            pInGame.history.forEach(val => {
+                const info = game.cardSettings?.[val] || { name: `カード${val}` };
+                const badge = document.createElement("div");
+                badge.className = `history-card card-${val}`;
+                badge.innerHTML = `<div>${val}</div><div class="h-name">${info.name}</div>`;
+                historyEl.appendChild(badge);
+            });
+            item.appendChild(historyEl);
+        }
+
+        listEl.appendChild(item);
+    });
 }
 
 export function syncGuestSettingsUI(cardSettings, drawSettings) {}
