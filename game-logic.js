@@ -51,22 +51,18 @@ class GameLogic {
         const logBox = document.getElementById("log-box");
         if (logBox) logBox.innerHTML = "";
 
-        this.players = rawList.map(p => {
-            // 💡 前回のラウンド（this.players）に同じプレイヤーがいたら、その最新スコアを優先して引き継ぐ
-            const prevPlayer = this.players.find(old => old.id === p.id);
-            const currentScore = prevPlayer ? (prevPlayer.score || 0) : (p.score || 0);
-
-            return {
-                id: p.id,
-                name: p.name,
-                hand: [],
-                alive: true,
-                protected: false,
-                history: [],
-                spectator: p.spectator || false,
-                score: currentScore // 💡 蓄積されたスコアを代入
-            };
-        });
+        // 参加プレイヤーの構築
+        // 💡 スコアは通信名簿（rawList）に完全に蓄積されているため、そのまま初期値として受け取るだけにします。
+        this.players = rawList.map(p => ({
+            id: p.id,
+            name: p.name,
+            hand: [],
+            alive: true,
+            protected: false,
+            history: [],
+            spectator: p.spectator || false,
+            score: p.score || 0 // 名簿にある現在のポイントをそのまま維持
+        }));
 
         // 💡 同時に、通信名簿側（rawPlayerList）のスコアも最新状態に同期をかける
         const currentRawList = window.rawPlayerList || rawList;
@@ -307,7 +303,7 @@ class GameLogic {
         this.nextTurn();
     }
 
-    // ラウンドの終了・勝者判定（全文）
+    // ラウンドの終了・勝者判定
     endRound() {
         this.isGameStarted = false;
         this.log(`🏁 ラウンドが終了しました！勝敗判定を行います。`);
@@ -317,10 +313,10 @@ class GameLogic {
 
         const alives = this.players.filter(p => p.alive && !p.spectator);
 
+        // 1. 勝者のポイント加算処理
         if (alives.length === 1) {
             const winner = alives[0];
             winner.score++;
-            // 💡 表記を「ポイント」に変更
             this.log(`🏆 🎉 勝者: ${winner.name} ！！ (生き残りのため勝利) [現在: ${winner.score}ポイント]`);
 
             // 通信同期用の生リスト(rawPlayerList)のスコアも連動して更新
@@ -348,10 +344,9 @@ class GameLogic {
 
             winners.forEach(w => {
                 w.score++;
-                // 💡 表記を「ポイント」に変更
                 this.log(`🏆 🎉 勝者: ${w.name} ！！ (手札パワー最大の勝利) [現在: ${w.score}ポイント]`);
 
-                // 通信同期用の生リスト(rawPlayerList)のスコアも連動して更新（複数勝利対応）
+                // 通信同期用の生リスト(rawPlayerList)のスコアも連動して更新
                 const rawWinner = currentRawList.find(p => p.id === w.id);
                 if (rawWinner) rawWinner.score = w.score;
             });
@@ -359,13 +354,22 @@ class GameLogic {
             this.log(`🤝 全員が同時に脱落したため、このラウンドは引き分けです。`);
         }
 
-        // ホスト用UIに「次のラウンド」ボタンを出現させるトリガー
+        // 2. 💡【重要追加】リザルト表示（ボタン出現）の前に、最新ポイントを全プレイヤーに即時通信送信する
+        // これにより、ゲスト側・ホスト側双方のリザルト画面（黄バッジ）がその瞬間に更新されます
+        if (typeof window.broadcastState === "function") {
+            window.broadcastState();
+        } else {
+            // network-managerから直接importして使っている場合は、ファイル上部で `import { broadcastState } from "./network-manager.js";` があればそのまま broadcastState(); と書けます。
+            // もしうまく動かない場合は、最下部の共通トリガーで担保されます。
+        }
+
+        // 3. ホスト用UIに「次のラウンド」ボタンを出現させる（リザルト表示）
         const nextBtn = document.getElementById("next-round-btn");
         if (nextBtn && window.isHost) {
             nextBtn.style.display = "block";
         }
 
-        // 💡 ポイントが入った瞬間に画面のプレイヤーリストをリアルタイムで強制再描画する
+        // 4. 自分のローカル画面も即座に再描画する
         if (typeof window.updateUI === "function") {
             window.updateUI();
         } else if (typeof updateUI === "function") {
